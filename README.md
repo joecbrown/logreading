@@ -22,10 +22,6 @@
   - Unused bonus expires at the week boundary
 - `lib/ledger.test.js` — assertions covering the worked example plus edge
   cases (overspending, expiration, pooling). Run with:
-  ```
-  node lib/ledger.test.js
-  ```
-
 ## Why this shape
 
 Keeping `ledger.js` free of AWS/Alexa imports means:
@@ -69,19 +65,35 @@ scheduled job. Not built yet — see below.
 
 ## Next steps (not built yet)
 
-1. **Deploy** — ASK CLI (`ask deploy`) or AWS Console: create the skill
-   from `skill-package/`, create the DynamoDB table from
-   `infra/table.json`, deploy `lambda/index.js` (+ `node_modules`) as the
-   Lambda function with `READING_APP_TABLE` set in its environment
-   variables, link skill and Lambda in the Alexa Developer Console
-2. **Per-session notifications** — after `stopReading()` succeeds in
-   `StopReadingIntentHandler`, send a text (SNS or Twilio) and email (SES)
-   with the session summary (child, minutes read, bonus hours earned,
-   running weekly balance)
-3. **Web dashboard** — read-only view of the ledger — small static page
-   hitting an API Gateway endpoint that reads from DynamoDB
-4. **Claude API integration** for comprehension questions, calibrated to
-   6th grade / 4th grade reading levels
+Architecture decided this session: the iPad app **replaces** Alexa entirely
+(Alexa can't do continuous listening, which auto-pause and transcription
+both need). Cloud transcription via **Amazon Transcribe** (same AWS
+account as the DynamoDB table, no new vendor). WPM no longer needs a
+separate manual-entry decision — it comes for free from the transcript's
+real word count once that pipeline exists.
 
-Phase 2 (device-lock enforcement) is parked per your call — not a near-term
+1. **REST API layer** — API Gateway + Lambda, reusing `ledger.js`/
+   `ledgerStore.js`/`dynamoStore.js` as-is, exposing start/stop/balance
+   over plain HTTP instead of Alexa intents
+2. **S3 + Amazon Transcribe pipeline** — iPad uploads session audio to S3,
+   backend triggers transcription, computes word count/WPM, feeds the
+   transcript to Claude for comprehension questions grounded in the
+   actual text read
+3. **iPad app** (SwiftUI) — mic access, local voice-activity detection for
+   auto-pause during silence, calls the REST API. Can be scaffolded here
+   but not compiled/tested outside Xcode.
+4. **Per-session notifications** — text (SMS) + email, triggered right
+   after a session is logged, not a scheduled digest
+5. **Web dashboard** — read-only view of the ledger
+6. Add real AWS/transcription/notification credentials via `.env`
+   (see `.env.example` — never commit the real `.env`)
+
+Kids: daughter (6th grade this fall), son (4th grade this fall) — for
+comprehension-question grade-level calibration.
+
+Phase 2 (device-lock enforcement) remains parked — not a near-term
 priority.
+
+The Alexa skill code (`lambda/index.js`, `skill-package/`) still works and
+is still tested, but is no longer the active development target — kept as
+a reference / fallback only.
