@@ -1,0 +1,12 @@
+{
+  "TableName": "ReadingAppTable",
+  "KeySchema": [
+    { "AttributeName": "childId", "KeyType": "HASH" },
+    { "AttributeName": "recordType", "KeyType": "RANGE" }
+  ],
+  "AttributeDefinitions": [
+    { "AttributeName": "childId", "AttributeType": "S" },
+    { "AttributeName": "recordType", "AttributeType": "S" }
+  ],
+  "BillingMode": "PAY_PER_REQUEST"
+}

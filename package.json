@@ -1,0 +1,23 @@
+{
+  "name": "reading-app",
+  "version": "1.0.0",
+  "description": "This is step 1 of the build order: the data model and business rules, verified in isolation before anything touches Alexa or AWS.",
+  "main": "index.js",
+  "directories": {
+    "lib": "lib"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1088.0",
+    "@aws-sdk/lib-dynamodb": "^3.1088.0",
+    "ask-sdk-core": "^2.14.0"
+  },
+  "devDependencies": {
+    "aws-sdk-client-mock": "^4.1.0"
+  }
+}

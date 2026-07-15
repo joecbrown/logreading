@@ -1,0 +1,53 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "invocationName": "reading time",
+      "intents": [
+        { "name": "AMAZON.CancelIntent", "samples": [] },
+        { "name": "AMAZON.HelpIntent", "samples": [] },
+        { "name": "AMAZON.StopIntent", "samples": [] },
+        { "name": "AMAZON.NavigateHomeIntent", "samples": [] },
+        { "name": "AMAZON.FallbackIntent", "samples": [] },
+        {
+          "name": "StartReadingIntent",
+          "slots": [
+            { "name": "ChildName", "type": "AMAZON.FirstName" }
+          ],
+          "samples": [
+            "start reading for {ChildName}",
+            "start reading time for {ChildName}",
+            "{ChildName} is starting to read",
+            "begin reading for {ChildName}",
+            "{ChildName} started reading"
+          ]
+        },
+        {
+          "name": "StopReadingIntent",
+          "slots": [
+            { "name": "ChildName", "type": "AMAZON.FirstName" }
+          ],
+          "samples": [
+            "stop reading for {ChildName}",
+            "stop reading time for {ChildName}",
+            "{ChildName} is done reading",
+            "{ChildName} finished reading",
+            "finish reading for {ChildName}"
+          ]
+        },
+        {
+          "name": "CheckBalanceIntent",
+          "slots": [
+            { "name": "ChildName", "type": "AMAZON.FirstName" }
+          ],
+          "samples": [
+            "how much time does {ChildName} have left this week",
+            "check {ChildName}'s balance",
+            "how many bonus hours does {ChildName} have",
+            "what's {ChildName}'s balance",
+            "how much electronics time does {ChildName} have"
+          ]
+        }
+      ]
+    }
+  }
+}
