@@ -22,6 +22,10 @@
   - Unused bonus expires at the week boundary
 - `lib/ledger.test.js` — assertions covering the worked example plus edge
   cases (overspending, expiration, pooling). Run with:
+  ```
+  node lib/ledger.test.js
+  ```
+
 ## Why this shape
 
 Keeping `ledger.js` free of AWS/Alexa imports means:
@@ -30,70 +34,58 @@ Keeping `ledger.js` free of AWS/Alexa imports means:
   just becomes a thin wrapper that (a) reads/writes this shape to DynamoDB
   and (b) translates Alexa intents into calls like `logReadingSession(...)`
 
-## What's built now (steps 1–2 of the build order, complete)
+## What's built now
 
 - `lib/ledger.js` — pure, tested business rules (baseline hours, bonus
-  pool, week boundaries)
-- `lib/store.js` — in-memory storage (local dev/tests)
-- `lib/dynamoStore.js` — DynamoDB storage, same interface as `store.js`,
-  contract-tested against a mocked AWS client (see `infra/table.json` for
-  the table definition — create it with:
-  `aws dynamodb create-table --cli-input-json file://infra/table.json`)
-- `lib/ledgerStore.js` — wires the ledger rules to storage + active-session
-  tracking (start/stop/balance/spend)
-- `skill-package/interactionModels/custom/en-US.json` — Alexa interaction
-  model: invocation name "reading time", intents for start/stop/check
-  balance, using the built-in `AMAZON.FirstName` slot so it works for any
-  kid's name without a custom list
-- `lambda/index.js` — the Alexa skill handler (`ask-sdk-core`). Auto-selects
-  DynamoDB when the `READING_APP_TABLE` env var is set (set this in the
-  real Lambda's configuration), otherwise falls back to in-memory for local
-  testing. Thin routing layer only — all logic stays in `ledger.js`/
-  `ledgerStore.js`.
-- 22 tests across `lib/*.test.js` and `test/alexaHandler.test.js`, covering
-  the pure rules, the storage wiring, the DynamoDB wire format, and the
-  full start → stop → balance flow through the real Alexa SDK
+  pool, week boundaries, WPM)
+- `lib/store.js` / `lib/dynamoStore.js` — swappable storage (in-memory /
+  DynamoDB)
+- `lib/ledgerStore.js` — wires the ledger rules to storage. Two ways to
+  log a session:
+  - `startReading`/`stopReading` — wall-clock timestamps (used by the
+    Alexa reference implementation, which has no concept of pausing)
+  - `logCompletedSession` — accepts a duration the caller already computed
+    (used by the REST API / iPad app, since the backend has no visibility
+    into on-device auto-pauses)
+- `api/handler.js` — **REST API for the iPad app** (API Gateway HTTP API +
+  Lambda). `POST /children/{childId}/sessions` logs a completed session,
+  `GET /children/{childId}/balance` returns the current week's balance.
+  Same DynamoDB-or-memory storage switch as the Alexa handler.
+- `lambda/index.js` + `skill-package/` — the Alexa skill, kept as a
+  reference/fallback, not the active target
+- 34 tests across `lib/*.test.js`, `test/alexaHandler.test.js`, and
+  `test/apiHandler.test.js`
 
 Kids: daughter (6th grade this fall) and son (4th grade this fall) — noted
 for later grade-level calibration of comprehension questions.
 
-**Notifications requirement (updated):** you want a text + email alert
-after *each individual reading session* — not a daily/weekly digest. That
-means the trigger point is inside `StopReadingIntentHandler` in
-`lambda/index.js`, right after a session is logged, not a separate
-scheduled job. Not built yet — see below.
+## Deploying the REST API (not yet done)
+
+1. Create the DynamoDB table from `infra/table.json` (if not already done)
+2. Zip `api/handler.js` + `lib/` + `node_modules` (production deps only:
+   `@aws-sdk/client-dynamodb`, `@aws-sdk/lib-dynamodb`), upload as a Lambda
+   function, handler = `api/handler.handler`
+3. Set the Lambda's environment variable `READING_APP_TABLE` to the table
+   name
+4. Create an HTTP API in API Gateway, add a Lambda integration, with
+   routes `POST /children/{childId}/sessions` and
+   `GET /children/{childId}/balance` both pointing at the Lambda
+5. Note the API's invoke URL — the iPad app will call this directly
 
 ## Next steps (not built yet)
 
-Architecture decided this session: the iPad app **replaces** Alexa entirely
-(Alexa can't do continuous listening, which auto-pause and transcription
-both need). Cloud transcription via **Amazon Transcribe** (same AWS
-account as the DynamoDB table, no new vendor). WPM no longer needs a
-separate manual-entry decision — it comes for free from the transcript's
-real word count once that pipeline exists.
-
-1. **REST API layer** — API Gateway + Lambda, reusing `ledger.js`/
-   `ledgerStore.js`/`dynamoStore.js` as-is, exposing start/stop/balance
-   over plain HTTP instead of Alexa intents
-2. **S3 + Amazon Transcribe pipeline** — iPad uploads session audio to S3,
-   backend triggers transcription, computes word count/WPM, feeds the
-   transcript to Claude for comprehension questions grounded in the
-   actual text read
-3. **iPad app** (SwiftUI) — mic access, local voice-activity detection for
-   auto-pause during silence, calls the REST API. Can be scaffolded here
-   but not compiled/tested outside Xcode.
-4. **Per-session notifications** — text (SMS) + email, triggered right
-   after a session is logged, not a scheduled digest
-5. **Web dashboard** — read-only view of the ledger
-6. Add real AWS/transcription/notification credentials via `.env`
+1. **S3 + Amazon Transcribe pipeline** — iPad uploads session audio → S3 →
+   Transcribe → word count/WPM → transcript handed to Claude for
+   comprehension questions grounded in the actual text read
+2. **iPad app** (SwiftUI) — mic access, local voice-activity detection for
+   auto-pause, computes active-reading minutes itself, calls the REST API
+   above. Can be scaffolded here but not compiled/tested outside Xcode.
+3. **Per-session notifications** — text (SMS) + email, triggered right
+   after a session logs (hook into `api/handler.js`'s sessions route)
+4. **Web dashboard** — read-only view of the ledger; the REST API's
+   `GET /children/{childId}/balance` route already supports this
+5. Add real AWS/transcription/notification credentials via `.env`
    (see `.env.example` — never commit the real `.env`)
-
-Kids: daughter (6th grade this fall), son (4th grade this fall) — for
-comprehension-question grade-level calibration.
 
 Phase 2 (device-lock enforcement) remains parked — not a near-term
 priority.
-
-The Alexa skill code (`lambda/index.js`, `skill-package/`) still works and
-is still tested, but is no longer the active development target — kept as
-a reference / fallback only.
