@@ -76,16 +76,40 @@ for later grade-level calibration of comprehension questions.
 
 1. **S3 + Amazon Transcribe pipeline** — iPad uploads session audio → S3 →
    Transcribe → word count/WPM → transcript handed to Claude for
-   comprehension questions grounded in the actual text read
-2. **iPad app** (SwiftUI) — mic access, local voice-activity detection for
-   auto-pause, computes active-reading minutes itself, calls the REST API
-   above. Can be scaffolded here but not compiled/tested outside Xcode.
-3. **Per-session notifications** — text (SMS) + email, triggered right
+   comprehension questions grounded in the actual text read. The iPad app
+   already records reading-only audio locally and exposes its file URL
+   from `AudioSessionManager.stop()` — it just isn't uploaded anywhere yet.
+2. **Per-session notifications** — text (SMS) + email, triggered right
    after a session logs (hook into `api/handler.js`'s sessions route)
-4. **Web dashboard** — read-only view of the ledger; the REST API's
+3. **Web dashboard** — read-only view of the ledger; the REST API's
    `GET /children/{childId}/balance` route already supports this
-5. Add real AWS/transcription/notification credentials via `.env`
+4. Add real AWS/transcription/notification credentials via `.env`
    (see `.env.example` — never commit the real `.env`)
+5. **Tune the auto-pause volume threshold** (`silenceThresholdDB` in
+   `ios/ReadingTime/AudioSessionManager.swift`) against a real room/device
+   — the current value is an untested starting guess
 
 Phase 2 (device-lock enforcement) remains parked — not a near-term
 priority.
+
+## iPad App (scaffolded, not yet built/run)
+
+Native SwiftUI app in `ios/ReadingTime/` — see **`ios/README.md`** for
+Xcode project setup, since these are source files only (no `.xcodeproj`,
+which isn't practical to hand-write). Key pieces:
+
+- `AudioSessionManager.swift` — the core new capability: local mic
+  monitoring via volume/RMS threshold, auto-pause after 45s of silence,
+  resumes on speech, records only the active-reading segments
+- `APIClient.swift` — calls the REST API in `api/handler.js`; base URL is
+  set in-app (Settings screen) since it's only known once API Gateway is
+  deployed
+- `ChildStore.swift` — local child profiles (name/grade); there's no
+  backend concept of "which kids exist" yet, just childIds on sessions
+- Views: child list → reading session (start/stop, live status, balance)
+
+**Written but not compiled or run** — no Xcode/device access in the
+environment that wrote this. Expect to find and fix real build errors;
+the code follows correct patterns (in particular, careful separation of
+the background audio thread from SwiftUI's main-thread requirements) but
+hasn't been verified by an actual compiler.
