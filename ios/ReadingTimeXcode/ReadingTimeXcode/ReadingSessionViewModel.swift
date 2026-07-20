@@ -30,10 +30,10 @@ final class ReadingSessionViewModel: ObservableObject {
             .store(in: &cancellables)
     }
 
-    func startSession() {
+    func startSession() async {
         errorMessage = nil
         do {
-            try audio.start()
+            try await audio.start()
             isRecording = true
         } catch {
             errorMessage = "Couldn't start recording: \(error.localizedDescription)"

@@ -97,15 +97,11 @@ for later grade-level calibration of comprehension questions.
    after a session logs (hook into `api/handler.js`'s sessions route)
 3. **Web dashboard** — read-only view of the ledger; the REST API's
    `GET /children/{childId}/balance` route already supports this
-4. **Real iPad device testing** — only Simulator + real-kids-in-Simulator
-   so far; a real device may reveal different mic behavior
-5. **Tune the auto-pause volume threshold** (`silenceThresholdDB` in
-   `ios/ReadingTime/AudioSessionManager.swift`) — the silence *duration*
-   (10s, tuned down twice from an initial 45s) has been tuned against real
-   kids; the volume/RMS *threshold* that decides speech-vs-silence hasn't
-   been deliberately tuned yet, just left at its original guess
-6. **Add API authentication** (see status note above)
-7. Wire real credentials into `.env` for AWS/transcription/notification
+4. **Real iPad device testing** — only Simulator so far, even for the
+   real-kids test; a physical device may behave differently and need
+   further threshold retuning
+5. **Add API authentication** (see status note above)
+6. Wire real credentials into `.env` for AWS/transcription/notification
    services (see `.env.example` — never commit the real `.env`)
 
 Phase 2 (device-lock enforcement) remains parked — not a near-term
@@ -113,23 +109,33 @@ priority.
 
 ## iPad App — built, running, tested with real backend
 
-Native SwiftUI app in `ios/ReadingTime/` — see **`ios/README.md`** for
-Xcode project setup, since these are source files only (no `.xcodeproj`,
-which isn't practical to hand-write). Key pieces:
+Native SwiftUI app — source lives in
+**`ios/ReadingTimeXcode/ReadingTimeXcode/`** (the actual Xcode project
+folder; see **`ios/README.md`** for why, and for setup/rebuild notes).
+Key pieces:
 
 - `AudioSessionManager.swift` — the core new capability: local mic
   monitoring via volume/RMS threshold, auto-pauses after a period of
   silence (`silenceThresholdSeconds`, currently 10s — tuned down twice
   from an initial 45s, via 20s, after testing with actual kids reading),
-  resumes on speech, records only the active-reading segments
+  resumes on speech, records only the active-reading segments. Requires
+  sustained loudness (`minimumSustainedSpeechSeconds`, 0.3s) before
+  counting something as speech, to filter out brief transients like
+  keyboard clicks. Volume threshold (`silenceThresholdDB`, currently -48)
+  was measured via a live on-screen debug readout against a real room
+  (quiet baseline ~-56 dB, actual reading ~-38 to -41 dB) — the original
+  -35 guess turned out to be louder than real reading volume, meaning it
+  never triggered at all.
 - `APIClient.swift` — calls the REST API in `api/handler.js`; base URL is
   set in-app (Settings screen) — now pointed at the real deployed API
 - `ChildStore.swift` — local child profiles (name/grade); there's no
   backend concept of "which kids exist" yet, just childIds on sessions
-- Views: child list → reading session (start/stop, live status, balance)
+- Views: child list → reading session (start/stop, live status, timer,
+  live mic-level debug readout, balance)
 
 **Confirmed working, not just compiling:** run in Xcode Simulator,
-auto-pause/resume verified against real silence/speech, and a full
+auto-pause/resume verified against real silence/speech (including
+correctly ignoring false triggers like keyboard clicks), and a full
 session (start → stop → log → balance refresh) confirmed to reach the
 real deployed AWS backend, with the resulting row visible in DynamoDB's
 table explorer. Not yet tested on a real physical iPad — Simulator only

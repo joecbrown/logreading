@@ -1,6 +1,6 @@
 # Reading Time / Electronics Bank App — Project Summary
 
-*Compiled July 20, 2026 — backend fully deployed and confirmed working end-to-end, for context on resuming work.*
+*Compiled July 20, 2026 (evening) — backend deployed and confirmed working end-to-end; iPad app tuned and confirmed working with real kids after a real debugging session, for context on resuming work.*
 
 Repo: https://github.com/joecbrown/logreading
 
@@ -89,65 +89,102 @@ passing across 5 test files):**
 - **`.env.example`** — placeholder template for future AWS/SES/SNS/Twilio/
   Claude API credentials. Real `.env` is gitignored.
 
-**iPad app (Swift/SwiftUI, in `ios/ReadingTime/`) — built, compiles, has
-been run in Xcode's Simulator, tested with real kids reading, and now
-confirmed talking to the real deployed AWS backend:**
+**iPad app (Swift/SwiftUI, source in
+`ios/ReadingTimeXcode/ReadingTimeXcode/` — see note on this path below) —
+built, compiles, runs in Xcode's Simulator, tested with real kids reading,
+and confirmed talking to the real deployed AWS backend:**
 
 - **`AudioSessionManager.swift`** — the core new capability. Monitors the
   mic continuously via a simple volume/RMS threshold (not real
   speech-recognition-based VAD), auto-pauses after a period of silence,
   resumes on speech, records only active-reading segments. **Confirmed
-  working end-to-end**: timer started, auto-paused during silence, and
-  resumed correctly when reading started again.
-  - **Silence duration tuned from real testing, twice:** started at 45s
-    (the original plan value); first testing with actual kids showed that
-    felt too slow, shortened to 20s; further testing showed even 20s was
-    still too slow, **shortened again to 10s.**
-  - Still an open item: the volume/RMS *threshold* that decides
-    speech-vs-silence hasn't been deliberately tuned — only the *duration*
-    has been adjusted so far.
+  working end-to-end, including two full rounds of real-world tuning:**
+  - **Silence duration**, tuned twice: 45s (original plan value) → 20s
+    (first real-kid test felt too slow) → **10s** (still felt too slow at
+    20s)
+  - **Volume threshold**, discovered broken then fixed: originally a
+    guess of -35 dB, which turned out to be *louder* than actual reading
+    volume — meaning it never triggered at all (the app was pausing at
+    exactly the 10s mark regardless of whether anyone was reading, since
+    it never once detected "speech"). Diagnosed by adding a live
+    on-screen debug readout of the actual measured dB level
+    (`currentDecibels`) rather than continuing to guess. Real numbers
+    measured: quiet room ≈ -56 dB, actual reading aloud ≈ -38 to -41 dB.
+    New threshold: **-48 dB**, sitting with real margin on both sides.
+  - **Sustained-loudness requirement added**, after the above fix
+    revealed a second issue: brief loud transients (keyboard clicks near
+    the Mac's mic in Simulator) were being detected as "speech" too.
+    Fixed by requiring loudness to persist for 0.3s
+    (`minimumSustainedSpeechSeconds`) before counting as real speech —
+    long enough to reliably catch genuine reading, short enough to still
+    feel responsive, while filtering out sharp single-buffer spikes.
 - **`APIClient.swift`** — calls the REST API; base URL configured in-app
   (Settings screen), now pointed at the real deployed API Gateway URL
 - **`ChildStore.swift`** — local child profiles (name/grade), since the
   backend has no concept of "which kids exist," just childIds on sessions
 - Views: child list → add-reader form → reading session (start/stop, live
-  status badge, timer, balance display) → settings
-- **One real bug found and fixed via manual testing, not just code
-  review:** the app crashed (`SIGABRT` on `engine.inputNode`) the first
-  time "Start Reading" was tapped, because the code assumed configuring
-  an `AVAudioSession` category would trigger the microphone permission
-  prompt — it doesn't reliably. Fixed by explicitly requesting permission
-  (`AVAudioApplication.requestRecordPermission`) before touching the audio
-  engine. Confirmed fixed by rerunning after the change.
-- A second bug was caught via code review (not testing, since it doesn't
-  manifest until a UI element is actually watched over time): nested
-  `ObservableObject`s (the ViewModel holding `AudioSessionManager`) don't
-  auto-propagate change notifications in SwiftUI — without a fix, the live
-  timer/status display would have silently stopped updating. Fixed by
-  forwarding `audio`'s `objectWillChange` into the view model's own.
+  status badge, timer, live mic-level debug readout, balance display) →
+  settings
+- **Bugs found and fixed via actual manual testing, not just code
+  review** (in the order discovered):
+  1. App crashed (`SIGABRT` on `engine.inputNode`) the first time "Start
+     Reading" was tapped — configuring an `AVAudioSession` category alone
+     doesn't reliably trigger the mic permission prompt. Fixed by
+     explicitly requesting permission
+     (`AVAudioApplication.requestRecordPermission`) before touching the
+     audio engine.
+  2. A **project-structure bug, not a code bug**: dragging the Swift
+     files into Xcode with "Copy items if needed" checked made Xcode
+     create its own separate physical copy of every file, inside
+     `ios/ReadingTimeXcode/ReadingTimeXcode/` — disconnected from the
+     `ios/ReadingTime/` folder every code update was actually being
+     extracted into. Several rounds of fixes (including bug #1 above)
+     were silently not reaching the compiled app for a while as a result
+     — the crash "appearing fixed" afterward was likely a coincidence
+     (once macOS grants mic permission once, it stays granted regardless
+     of which code version runs). Caught when a build error referenced
+     an old, pre-fix version of a file that had definitely already been
+     updated. **Resolved by retiring `ios/ReadingTime/` entirely** —
+     `ios/ReadingTimeXcode/ReadingTimeXcode/` is now the one real source
+     location, documented in `ios/README.md`.
+  3. A **crash after the file-sync fix**: `TCC_CRASHING_DUE_TO_
+     PRIVACY_VIOLATION` — the "Privacy - Microphone Usage Description"
+     Info.plist entry (originally added correctly, early on) had gone
+     missing, likely lost somewhere in the file/project confusion from
+     bug #2. Re-added; resolved.
+  4. A **Swift 6 concurrency compiler warning** (would become a hard
+     error in stricter language modes): comparing the `ReadingState` enum
+     from inside a plain `Timer` closure conflicted with the project's
+     actor-isolation inference rules, even though the closure genuinely
+     runs on the main thread in practice. Fixed by checking a plain
+     `Bool` flag (`isCurrentlyReading`) instead of the enum in that one
+     spot.
+  5. The volume-threshold and transient-filtering issues described above.
+  6. A SwiftUI bug caught via code review (not testing, since it doesn't
+     manifest until a UI element is watched over time): nested
+     `ObservableObject`s (the ViewModel holding `AudioSessionManager`)
+     don't auto-propagate change notifications — without a fix, the live
+     timer/status display would have silently stopped updating. Fixed by
+     forwarding `audio`'s `objectWillChange` into the view model's own.
 - **Full real-data round trip confirmed:** tapped Start/Stop Reading with
   actual kids reading aloud, app logged the session to the real API
   Gateway → Lambda → DynamoDB chain, and the resulting row (real child
   name, real minutes/hours) was visually confirmed in DynamoDB's table
   explorer — not a mocked or local-only test.
-- Setup instructions are in `ios/README.md` (Xcode project creation,
-  adding files, mic permission Info.plist entry, deployment target,
-  signing with a free Personal Team, building for Simulator vs. real
-  device)
+- `ios/README.md` documents current setup/rebuild notes, including the
+  file-location lesson from bug #2 above.
 
 **Known limitations of what's built, going in eyes-open:**
-- Volume-threshold detection isn't real speech recognition — can't tell
-  reading aloud apart from other noise. Silence *duration* (10s, tuned
-  down twice from 45s) has been tuned against real kids; the volume
-  *threshold* (`silenceThresholdDB`) hasn't been deliberately tuned yet,
-  just left at its original guess. Worth watching for: a 10s threshold is
-  short enough that normal pauses (turning a page, thinking about a word)
-  could start triggering false pauses — that's the tradeoff of tuning it
-  this aggressively, worth keeping an eye on with more use.
+- Volume-threshold detection still isn't real speech recognition — the
+  sustained-loudness fix reduces false positives from brief sounds, but
+  can't distinguish sustained reading from other sustained sounds (a TV,
+  someone else talking nearby).
 - Not yet tested on a real device — only Simulator so far (using the
   Mac's mic, even for the real-kids testing). Real-device testing requires
   the device-signing step (plugging the iPad into the Mac, letting Xcode
-  register it), not yet done.
+  register it), not yet done. Volume levels/background noise will likely
+  need retuning again once that happens — Simulator uses the Mac's own
+  room and mic, not wherever the iPad actually sits.
 - Recorded audio is captured locally but nothing uploads it anywhere yet.
 - **The deployed API has no authentication** — see the AWS Deployment
   section below.
@@ -205,12 +242,9 @@ personal/family project. Tracked as a next step below.
 4. **Web dashboard** — read-only view of the ledger; the REST API's
    balance route already supports this
 5. **Real iPad device testing** — Simulator only so far, even for the
-   real-kids test; a physical device may behave differently
-6. **Tune the volume/RMS threshold** (`silenceThresholdDB`) — only the
-   silence *duration* has been tuned against real testing so far (45s →
-   20s → 10s); the volume threshold that decides speech-vs-silence is
-   still the original untested guess
-7. Wire real credentials into `.env` for AWS/notifications/Claude API
+   real-kids test; a physical device may behave differently and likely
+   need further threshold retuning (different room, different mic)
+6. Wire real credentials into `.env` for AWS/notifications/Claude API
 
 No preference has been stated on ordering among items 2–4 — open decision
 for later.
@@ -239,6 +273,22 @@ current parent-enforced honor system for spending earned time.
   files, extracted directly into the existing project folder
   (`tar -xzf update.tar.gz -C .`) rather than hand-pasted, to avoid the
   earlier text-editor (pico/nano) mishap
+- This session's biggest lesson, project-management rather than pure
+  code: when Xcode's "Copy items if needed" makes its own physical file
+  copy, that copy — not whatever folder updates keep getting extracted
+  into — is the one actually being compiled. Several rounds of fixes
+  silently didn't reach the running app because of this. Resolved by
+  eliminating the duplicate folder entirely (`ios/ReadingTime/` retired;
+  `ios/ReadingTimeXcode/ReadingTimeXcode/` is now the one real source),
+  and by adding a `.gitignore` for Xcode's per-machine build artifacts
+  (`xcuserdata/`, `DerivedData/`, etc.) so those don't get committed
+  going forward either.
+- This session's debugging-methodology lesson: when a threshold-tuning
+  bug ("it's not detecting my reading") couldn't be diagnosed by
+  reasoning alone, adding a live on-screen debug readout of the actual
+  measured value (mic volume in dB) turned guessing into measuring —
+  found the real numbers in under a minute once visible, versus several
+  rounds of blind guess-and-check before that.
 - This session's API Gateway learning: HTTP API vs. REST API (chose HTTP
   API — simpler, cheaper, matches what the Lambda code expects), the
   route-configuration screen not pre-filling a route the way expected

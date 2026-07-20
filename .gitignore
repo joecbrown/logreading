@@ -3,3 +3,10 @@ node_modules/
 *.log
 .env
 .env.local
+
+# Xcode — per-user/machine build artifacts, not meaningful to track in git
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+*.xcscmblueprint

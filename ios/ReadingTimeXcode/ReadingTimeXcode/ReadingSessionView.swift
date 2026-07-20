@@ -16,6 +16,13 @@ struct ReadingSessionView: View {
                 .font(.system(size: 56, weight: .semibold, design: .rounded))
                 .monospacedDigit()
 
+            if viewModel.audio.state != .idle {
+                Text("Mic level: \(Int(viewModel.audio.currentDecibels)) dB  (pause threshold: \(Int(viewModel.audio.silenceThresholdDB)) dB)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+
             Button(action: toggle) {
                 Text(viewModel.isRecording ? "Stop Reading" : "Start Reading")
                     .font(.title2.bold())
@@ -81,7 +88,7 @@ struct ReadingSessionView: View {
         if viewModel.isRecording {
             Task { await viewModel.stopSession() }
         } else {
-            viewModel.startSession()
+            Task { await viewModel.startSession() }
         }
     }
 

@@ -1,76 +1,72 @@
-# iPad App — Setup in Xcode
+# iPad App — Status & Setup
 
-This folder contains Swift source files, not a complete Xcode project —
-Xcode project files aren't practical to hand-write outside Xcode itself.
-Here's how to turn this into a real, buildable project.
+**Status: built, running, and confirmed working** — compiled in Xcode,
+run in Simulator, tested with real kids reading, and confirmed logging
+real sessions through the real deployed AWS backend (see the main
+README and PROJECT_SUMMARY.md for the full story).
 
-## 1. Create the Xcode project
+## Where the actual source code lives
 
-1. Open Xcode → **File → New → Project**
-2. Choose **iOS → App**, click Next
-3. Product Name: `ReadingTime` (matches `ReadingTimeApp.swift`'s struct
-   name, though this isn't strictly required)
-4. Interface: **SwiftUI**. Language: **Swift**
-5. Uncheck "Use Core Data" and "Include Tests" (fine to add tests later)
-6. Save it wherever you like — a sensible spot is right inside this repo,
-   e.g. `reading-app/ios/ReadingTimeXcode/`
+**`ReadingTimeXcode/ReadingTimeXcode/`** — this flat folder (no
+subfolders) is the one real source of truth. It's what the Xcode project
+(`ReadingTimeXcode.xcodeproj`, alongside it) actually compiles.
 
-## 2. Replace the generated files with these
+This wasn't true earlier in development — an initial `ios/ReadingTime/`
+folder (with a `Views/` subfolder) was the original source, meant to be
+dragged into a new Xcode project. That drag-in used "Copy items if
+needed," which made Xcode's *own* physical copy diverge from the
+original folder. Several rounds of edits went to the wrong (unused) copy
+before this was caught (a compiler error referencing an old, un-updated
+version of a file was the tell). The old `ios/ReadingTime/` folder has
+since been removed entirely, so there's only one copy now — no more
+confusion about which one Xcode is actually building.
 
-Xcode will have generated its own `ReadingTimeApp.swift`, `ContentView.swift`,
-etc. Delete those (Xcode sidebar → right-click → Delete → Move to Trash),
-then drag the files from this folder into the Xcode project navigator:
+**If you ever get a code update for this app again:** it should come as
+files meant to be extracted directly into
+`ios/ReadingTimeXcode/ReadingTimeXcode/`, overwriting in place. No
+dragging into Xcode should be needed for a plain code change — just
+extract, then `Cmd + R` in Xcode to rebuild and run.
 
-- `Models.swift`
-- `ChildStore.swift`
-- `APIClient.swift`
-- `AudioSessionManager.swift`
-- `ReadingSessionViewModel.swift`
-- `ReadingTimeApp.swift`
-- `Views/ContentView.swift`
-- `Views/AddChildView.swift`
-- `Views/ReadingSessionView.swift`
-- `Views/SettingsView.swift`
+## Rebuilding after a code update
 
-When Xcode asks, choose "Copy items if needed" and make sure your app
-target's checkbox is checked.
+```
+cd ~/Downloads/reading-app/ios/ReadingTimeXcode/ReadingTimeXcode
+tar -xzf ~/Downloads/whatever-update.tar.gz -C .
+```
 
-## 3. Add microphone permission (required — the app will crash without this)
+Then in Xcode: `Cmd + R` (Run — this rebuilds automatically first).
 
-1. Click your project in the navigator → select the **ReadingTime** target
-2. Go to the **Info** tab
-3. Add a row: key **Privacy - Microphone Usage Description**, value
-   something like "Used to detect when your child is reading aloud, so
-   the timer can pause automatically during breaks."
+If something seems stale even after that (a value not changing, an old
+error persisting), try **Product → Clean Build Folder** (`Cmd+Shift+K`)
+first, then `Cmd + R` again — this clears Xcode's build cache, which can
+occasionally hold onto old compiled output.
 
-## 4. Set the deployment target
+## Required project configuration (already done, documented for reference)
 
-Project settings → General tab → set **Minimum Deployments** to **iOS 17**
-(needed for the `#Preview` macro and a couple of modern SwiftUI APIs used
-here).
+- **Microphone permission:** Project → target `ReadingTimeXcode` → **Info**
+  tab → a row for **"Privacy - Microphone Usage Description"** must exist,
+  or iOS force-kills the app the instant it touches the microphone (a
+  `TCC_CRASHING_DUE_TO_PRIVACY_VIOLATION` crash — this happened once
+  already, from the row silently not being present after a mixed-up
+  drag-in; worth a quick check if this ever crashes on a fresh install).
+- **Deployment target:** iOS 17 minimum (General tab)
+- **Signing:** Team set to your Apple ID's **Personal Team** (free,
+  no paid Developer Program needed for installing on your own device —
+  just requires re-signing every ~7 days via Xcode)
 
-## 5. Signing (per your earlier question about the dev account)
+## Testing notes
 
-Project settings → **Signing & Capabilities** → choose your Apple ID under
-Team (a free personal account works for installing on your own device —
-see the note from earlier in this project about the 7-day re-signing
-limit).
-
-## 6. Build and run on a real device
-
-Simulator microphone input is unreliable for this kind of audio-level
-work — test on an actual iPad connected via USB (or wirelessly, once
-paired once via USB). Select your iPad as the run destination in Xcode's
-toolbar, then press the Run button (▶).
-
-## 7. Before it's actually useful
-
-- **Settings → API Base URL** needs the API Gateway invoke URL, which
-  doesn't exist until the REST API is deployed (see the main README's
-  "Deploying the REST API" section) — until then, sessions won't log
-  anywhere, though the local recording/auto-pause logic can still be
-  tested on its own.
-- **Tune `silenceThresholdDB`** in `AudioSessionManager.swift` — the
-  default (-35 dBFS) is a guess. Test in the room this will actually be
-  used in, and watch whether the "Paused" badge in the app triggers
-  correctly during real silence vs. real reading.
+- **Simulator microphone = your Mac's real microphone**, passed through.
+  Useful for confirming logic works at all, but the volume levels,
+  background noise, and acoustic environment are your Mac's room, not
+  wherever the iPad will actually sit — expect some retuning once this
+  moves to a real device.
+- **Not yet tested on a physical iPad** — only Simulator so far, including
+  the real-kids testing session. Real-device testing requires plugging
+  the iPad into the Mac via USB once and letting Xcode register it as a
+  run destination (this hasn't been done yet).
+- A live microphone-level debug readout (`currentDecibels`, shown on the
+  reading session screen) was added specifically to diagnose a tuning
+  bug — it's genuinely useful to keep for now in case a real device needs
+  retuning too, safe to remove later once the thresholds feel solid
+  long-term across real use.
