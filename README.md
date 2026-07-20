@@ -1,17 +1,22 @@
 # Reading Time / Electronics Bank — Ledger Core
 
-> **Status (as of this commit):** The core ledger logic (`lib/ledger.js`,
-> `lib/ledgerStore.js`) and DynamoDB storage (`lib/dynamoStore.js`,
-> `infra/table.json`) are stable and reused going forward. The Alexa skill
-> (`lambda/index.js`, `skill-package/`) was the original front-end and is
-> fully built + tested, but **the plan is to replace it with a native iPad
-> app** — Alexa can't do continuous listening for auto-pause-on-silence or
-> transcription, which the iPad can. The Alexa code is kept here as a
-> working reference / fallback, not the active development target. Next
-> up: a REST API layer, an S3 + Amazon Transcribe pipeline, and the iOS
-> app itself — none of those are built yet.
+> **Status:** Backend is **deployed and confirmed working end-to-end** —
+> DynamoDB table, Lambda function, and API Gateway HTTP API are all live
+> in AWS (`us-east-2`). The iPad app has been built, run (Simulator), and
+> tested with real kids reading, successfully logging real sessions
+> through the real deployed backend (confirmed via DynamoDB's table
+> explorer). The Alexa skill (`lambda/index.js`, `skill-package/`) was the
+> original front-end, fully built + tested, but is no longer the active
+> target — replaced by the iPad app, since Alexa can't do continuous
+> listening for auto-pause-on-silence or transcription. Kept as reference.
+>
+> **Known gap worth flagging:** the deployed API has no authentication —
+> anyone with the invoke URL could hit it. Low practical risk for a home
+> setup where the URL isn't published anywhere public, but worth adding
+> (e.g. an API key or IAM auth on the routes) before treating this as
+> more than a personal project.
 
-*Captured: July 15, 2026*
+*Captured: July 20, 2026*
 
 ## Files
 
@@ -59,18 +64,27 @@ Keeping `ledger.js` free of AWS/Alexa imports means:
 Kids: daughter (6th grade this fall) and son (4th grade this fall) — noted
 for later grade-level calibration of comprehension questions.
 
-## Deploying the REST API (not yet done)
+## Deploying the REST API — ✅ done
 
-1. Create the DynamoDB table from `infra/table.json` (if not already done)
-2. Zip `api/handler.js` + `lib/` + `node_modules` (production deps only:
-   `@aws-sdk/client-dynamodb`, `@aws-sdk/lib-dynamodb`), upload as a Lambda
-   function, handler = `api/handler.handler`
-3. Set the Lambda's environment variable `READING_APP_TABLE` to the table
-   name
-4. Create an HTTP API in API Gateway, add a Lambda integration, with
-   routes `POST /children/{childId}/sessions` and
-   `GET /children/{childId}/balance` both pointing at the Lambda
-5. Note the API's invoke URL — the iPad app will call this directly
+1. ✅ DynamoDB table `ReadingAppTable` created (partition key `childId`,
+   sort key `recordType`, on-demand billing) in `us-east-2`
+2. ✅ Lambda function `ReadingAppApi` created, code uploaded (zip of
+   `api/handler.js` + `lib/` + production-only `node_modules`), handler
+   set to `api/handler.handler`
+3. ✅ Environment variable `READING_APP_TABLE=ReadingAppTable` set; Lambda
+   execution role granted `AmazonDynamoDBFullAccess` (broad, not scoped to
+   just this table — a deliberate practical tradeoff, same reasoning as
+   the IAM user's `AdministratorAccess`)
+4. ✅ HTTP API created in API Gateway (`ReadingAppHttpApi`) with both
+   routes wired to the Lambda, `$default` stage with auto-deploy
+5. ✅ Invoke URL confirmed working via direct browser request and via the
+   iPad app (its Settings screen holds the URL locally on-device, not
+   committed to git). The URL itself is intentionally not written into
+   any file in this repo — since the API has no authentication yet (see
+   status note above), publishing the endpoint anywhere public would let
+   anyone who finds it write arbitrary session data. If you want it saved
+   somewhere for your own reference, put it in your local `.env` (already
+   gitignored), not in a tracked file.
 
 ## Next steps (not built yet)
 
@@ -83,33 +97,40 @@ for later grade-level calibration of comprehension questions.
    after a session logs (hook into `api/handler.js`'s sessions route)
 3. **Web dashboard** — read-only view of the ledger; the REST API's
    `GET /children/{childId}/balance` route already supports this
-4. Add real AWS/transcription/notification credentials via `.env`
-   (see `.env.example` — never commit the real `.env`)
+4. **Real iPad device testing** — only Simulator + real-kids-in-Simulator
+   so far; a real device may reveal different mic behavior
 5. **Tune the auto-pause volume threshold** (`silenceThresholdDB` in
-   `ios/ReadingTime/AudioSessionManager.swift`) against a real room/device
-   — the current value is an untested starting guess
+   `ios/ReadingTime/AudioSessionManager.swift`) — the silence *duration*
+   (10s, tuned down twice from an initial 45s) has been tuned against real
+   kids; the volume/RMS *threshold* that decides speech-vs-silence hasn't
+   been deliberately tuned yet, just left at its original guess
+6. **Add API authentication** (see status note above)
+7. Wire real credentials into `.env` for AWS/transcription/notification
+   services (see `.env.example` — never commit the real `.env`)
 
 Phase 2 (device-lock enforcement) remains parked — not a near-term
 priority.
 
-## iPad App (scaffolded, not yet built/run)
+## iPad App — built, running, tested with real backend
 
 Native SwiftUI app in `ios/ReadingTime/` — see **`ios/README.md`** for
 Xcode project setup, since these are source files only (no `.xcodeproj`,
 which isn't practical to hand-write). Key pieces:
 
 - `AudioSessionManager.swift` — the core new capability: local mic
-  monitoring via volume/RMS threshold, auto-pause after 45s of silence,
+  monitoring via volume/RMS threshold, auto-pauses after a period of
+  silence (`silenceThresholdSeconds`, currently 10s — tuned down twice
+  from an initial 45s, via 20s, after testing with actual kids reading),
   resumes on speech, records only the active-reading segments
 - `APIClient.swift` — calls the REST API in `api/handler.js`; base URL is
-  set in-app (Settings screen) since it's only known once API Gateway is
-  deployed
+  set in-app (Settings screen) — now pointed at the real deployed API
 - `ChildStore.swift` — local child profiles (name/grade); there's no
   backend concept of "which kids exist" yet, just childIds on sessions
 - Views: child list → reading session (start/stop, live status, balance)
 
-**Written but not compiled or run** — no Xcode/device access in the
-environment that wrote this. Expect to find and fix real build errors;
-the code follows correct patterns (in particular, careful separation of
-the background audio thread from SwiftUI's main-thread requirements) but
-hasn't been verified by an actual compiler.
+**Confirmed working, not just compiling:** run in Xcode Simulator,
+auto-pause/resume verified against real silence/speech, and a full
+session (start → stop → log → balance refresh) confirmed to reach the
+real deployed AWS backend, with the resulting row visible in DynamoDB's
+table explorer. Not yet tested on a real physical iPad — Simulator only
+so far (using the Mac's own mic).

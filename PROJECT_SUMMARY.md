@@ -1,6 +1,6 @@
 # Reading Time / Electronics Bank App — Project Summary
 
-*Compiled July 17, 2026 (mid-AWS-deployment), for context on resuming work.*
+*Compiled July 20, 2026 — backend fully deployed and confirmed working end-to-end, for context on resuming work.*
 
 Repo: https://github.com/joecbrown/logreading
 
@@ -83,22 +83,31 @@ passing across 5 test files):**
 - **`api/handler.js`** — **REST API for the iPad app** (API Gateway HTTP
   API + Lambda). `POST /children/{childId}/sessions` logs a completed
   session; `GET /children/{childId}/balance` returns the week's balance.
-  Same DynamoDB-or-memory storage switch as the Alexa handler. Not yet
-  deployed to real AWS (see README's "Deploying the REST API" steps).
+  Same DynamoDB-or-memory storage switch as the Alexa handler. **Now
+  deployed to real AWS and confirmed working end-to-end** (see AWS
+  Deployment section below) — no longer just tested locally.
 - **`.env.example`** — placeholder template for future AWS/SES/SNS/Twilio/
   Claude API credentials. Real `.env` is gitignored.
 
-**iPad app (Swift/SwiftUI, in `ios/ReadingTime/`) — built, compiles, and
-has been run and manually tested in Xcode's Simulator this session:**
+**iPad app (Swift/SwiftUI, in `ios/ReadingTime/`) — built, compiles, has
+been run in Xcode's Simulator, tested with real kids reading, and now
+confirmed talking to the real deployed AWS backend:**
 
 - **`AudioSessionManager.swift`** — the core new capability. Monitors the
   mic continuously via a simple volume/RMS threshold (not real
-  speech-recognition-based VAD), auto-pauses after 45s of silence, resumes
-  on speech, records only active-reading segments. **Confirmed working
-  end-to-end in Simulator this session**: timer started, auto-paused after
-  45s of silence, and resumed correctly when reading started again.
+  speech-recognition-based VAD), auto-pauses after a period of silence,
+  resumes on speech, records only active-reading segments. **Confirmed
+  working end-to-end**: timer started, auto-paused during silence, and
+  resumed correctly when reading started again.
+  - **Silence duration tuned from real testing, twice:** started at 45s
+    (the original plan value); first testing with actual kids showed that
+    felt too slow, shortened to 20s; further testing showed even 20s was
+    still too slow, **shortened again to 10s.**
+  - Still an open item: the volume/RMS *threshold* that decides
+    speech-vs-silence hasn't been deliberately tuned — only the *duration*
+    has been adjusted so far.
 - **`APIClient.swift`** — calls the REST API; base URL configured in-app
-  (Settings screen) since it's only known once the API is deployed
+  (Settings screen), now pointed at the real deployed API Gateway URL
 - **`ChildStore.swift`** — local child profiles (name/grade), since the
   backend has no concept of "which kids exist," just childIds on sessions
 - Views: child list → add-reader form → reading session (start/stop, live
@@ -116,6 +125,11 @@ has been run and manually tested in Xcode's Simulator this session:**
   auto-propagate change notifications in SwiftUI — without a fix, the live
   timer/status display would have silently stopped updating. Fixed by
   forwarding `audio`'s `objectWillChange` into the view model's own.
+- **Full real-data round trip confirmed:** tapped Start/Stop Reading with
+  actual kids reading aloud, app logged the session to the real API
+  Gateway → Lambda → DynamoDB chain, and the resulting row (real child
+  name, real minutes/hours) was visually confirmed in DynamoDB's table
+  explorer — not a mocked or local-only test.
 - Setup instructions are in `ios/README.md` (Xcode project creation,
   adding files, mic permission Info.plist entry, deployment target,
   signing with a free Personal Team, building for Simulator vs. real
@@ -123,69 +137,66 @@ has been run and manually tested in Xcode's Simulator this session:**
 
 **Known limitations of what's built, going in eyes-open:**
 - Volume-threshold detection isn't real speech recognition — can't tell
-  reading aloud apart from other noise. The Simulator test used the Mac's
-  mic in whatever room you were in — the threshold (`silenceThresholdDB`
-  in `AudioSessionManager.swift`) will likely need retuning on the actual
-  iPad in the actual room it'll be used in.
-- Not yet tested on a real device — only Simulator so far. Real-device
-  testing requires the device-signing step (plugging the iPad into the
-  Mac, letting Xcode register it), not yet done.
+  reading aloud apart from other noise. Silence *duration* (10s, tuned
+  down twice from 45s) has been tuned against real kids; the volume
+  *threshold* (`silenceThresholdDB`) hasn't been deliberately tuned yet,
+  just left at its original guess. Worth watching for: a 10s threshold is
+  short enough that normal pauses (turning a page, thinking about a word)
+  could start triggering false pauses — that's the tradeoff of tuning it
+  this aggressively, worth keeping an eye on with more use.
+- Not yet tested on a real device — only Simulator so far (using the
+  Mac's mic, even for the real-kids testing). Real-device testing requires
+  the device-signing step (plugging the iPad into the Mac, letting Xcode
+  register it), not yet done.
 - Recorded audio is captured locally but nothing uploads it anywhere yet.
+- **The deployed API has no authentication** — see the AWS Deployment
+  section below.
 
-## AWS Deployment Progress (in progress — picking up mid-setup)
+## AWS Deployment — ✅ Complete and confirmed end-to-end
 
-**Region: `us-east-2` (Ohio)** — chosen because that's where the console
-defaulted; keep using this exact region for every AWS step, since a
-silent region mismatch is the most common source of "wait, where did
-that go?" confusion. (`.env.example` and this doc have been corrected to
-say `us-east-2`, replacing an earlier `us-east-1` placeholder.)
+**Region: `us-east-2` (Ohio).** Keep using this exact region for any
+future AWS work on this project.
 
 **Access:** created a dedicated IAM user for all console work, instead of
 using the AWS root login — root has account-level powers (billing,
 account closure) that can't be scoped down, so it's kept aside as a
 break-glass fallback only. The IAM user has `AdministratorAccess`
 attached (broad, not minimal — a deliberate practical tradeoff for a
-solo personal project, to avoid debugging permission errors one-by-one
-through the rest of setup).
+solo personal project).
 
-**Completed so far:**
-1. ✅ DynamoDB table `ReadingAppTable` created — partition key `childId`
-   (String), sort key `recordType` (String), on-demand billing. Status:
-   Active.
-2. ✅ Lambda function `ReadingAppApi` created (latest Node.js runtime,
-   default `x86_64` architecture, default execution role auto-created).
-3. ✅ Code uploaded via `lambda-deployment.zip` — a minimal deployment
-   package (just `api/handler.js`, `lib/*.js`, and only the two
-   `@aws-sdk` production dependencies, no dev/Alexa-only packages) that
-   was locally tested (invoked directly in a sandbox, confirmed correct
-   response) before being handed over, so we know the code itself works
-   independent of any AWS configuration.
-4. ✅ Handler path corrected from the default `index.handler` to
-   `api/handler.handler` (Code tab → scroll below the editor → **Runtime
-   settings** panel → Edit — NOT under Configuration → General, which is
-   a wrong turn we hit once already).
+**What's live:**
+1. ✅ DynamoDB table `ReadingAppTable` — partition key `childId` (String),
+   sort key `recordType` (String), on-demand billing
+2. ✅ Lambda function `ReadingAppApi` — Node.js runtime, handler set to
+   `api/handler.handler`, environment variable
+   `READING_APP_TABLE=ReadingAppTable`
+3. ✅ Lambda's execution role granted `AmazonDynamoDBFullAccess` (hit and
+   fixed an `AccessDeniedException` on the first test — the
+   auto-created role had no DynamoDB permissions by default; this is
+   broader than strictly necessary, scoped to any table in the account
+   rather than just this one, same practical tradeoff as the IAM user's
+   admin access)
+4. ✅ API Gateway HTTP API `ReadingAppHttpApi`, `$default` stage,
+   auto-deploy enabled, both routes wired to the Lambda:
+   - `POST /children/{childId}/sessions`
+   - `GET /children/{childId}/balance`
+5. ✅ **Confirmed working at every layer**, in order: Lambda console test
+   → invoke URL tested directly in a browser → iPad app's Settings screen
+   pointed at the real URL → full Start/Stop Reading session in the app
+   with real kids reading → resulting row visually confirmed in
+   DynamoDB's table explorer (real child name, real minutes/hours, not a
+   mock or local test)
 
-**Next steps, in order (this is exactly where to resume):**
-1. **Set the Lambda environment variable** — Configuration tab →
-   Environment variables → Edit → Add → Key: `READING_APP_TABLE`, Value:
-   `ReadingAppTable`. Without this, the function silently falls back to
-   in-memory storage instead of actually using DynamoDB.
-2. **Test the function directly in the Lambda console** (Test tab) before
-   wiring up API Gateway, to confirm it can actually reach DynamoDB (the
-   auto-created execution role may need DynamoDB permissions added — if
-   the test fails with an access-denied error, that's the fix needed)
-3. **Create an API Gateway HTTP API** with a Lambda integration, routes
-   `POST /children/{childId}/sessions` and
-   `GET /children/{childId}/balance`, both pointing at `ReadingAppApi`
-4. **Get the invoke URL** and paste it into the iPad app's Settings screen
-5. Test end-to-end: tap Start/Stop Reading in the app, confirm a row
-   actually appears in the DynamoDB table (via the console's "Explore
-   table items")
+**⚠️ Known gap: no authentication on the API.** Anyone with the invoke URL
+could currently hit it and write arbitrary session data. Low practical
+risk today (the URL isn't published anywhere public — deliberately kept
+out of every file in this repo, including this one), but worth adding
+(an API key, or IAM-based auth on the routes) before this is more than a
+personal/family project. Tracked as a next step below.
 
-## Not Yet Built (after AWS deployment finishes)
+## Not Yet Built
 
-1. **Test on the real iPad** — requires the device-signing step, then
-   retuning the silence threshold for the real room/device
+1. **Add API authentication** (see security note above)
 2. **S3 + Amazon Transcribe pipeline** — iPad uploads session audio → S3 →
    Transcribe → word count/WPM → transcript handed to Claude for
    comprehension questions grounded in the actual text read
@@ -193,7 +204,13 @@ through the rest of setup).
    session logs (SES for email; SNS or Twilio for SMS, not yet decided)
 4. **Web dashboard** — read-only view of the ledger; the REST API's
    balance route already supports this
-5. Wire real credentials into `.env` for AWS/notifications/Claude API
+5. **Real iPad device testing** — Simulator only so far, even for the
+   real-kids test; a physical device may behave differently
+6. **Tune the volume/RMS threshold** (`silenceThresholdDB`) — only the
+   silence *duration* has been tuned against real testing so far (45s →
+   20s → 10s); the volume threshold that decides speech-vs-silence is
+   still the original untested guess
+7. Wire real credentials into `.env` for AWS/notifications/Claude API
 
 No preference has been stated on ordering among items 2–4 — open decision
 for later.
@@ -222,6 +239,11 @@ current parent-enforced honor system for spending earned time.
   files, extracted directly into the existing project folder
   (`tar -xzf update.tar.gz -C .`) rather than hand-pasted, to avoid the
   earlier text-editor (pico/nano) mishap
+- This session's API Gateway learning: HTTP API vs. REST API (chose HTTP
+  API — simpler, cheaper, matches what the Lambda code expects), the
+  route-configuration screen not pre-filling a route the way expected
+  (had to add both manually), and the `$default` stage with auto-deploy
+  meaning no manual "deploy" step is needed after route changes
 - This session's AWS learning: the difference between the root user and
   an IAM user (and why root should be set aside as a fallback, not used
   day-to-day), creating an IAM user with console access, and navigating

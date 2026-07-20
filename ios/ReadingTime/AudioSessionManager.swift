@@ -44,9 +44,11 @@ final class AudioSessionManager: ObservableObject {
     @Published private(set) var activeSeconds: Int = 0
     @Published var lastError: String?
 
-    /// How long silence must persist before auto-pausing (the 45-second
-    /// rule from the plan).
-    var silenceThresholdSeconds: TimeInterval = 45
+    /// How long silence must persist before auto-pausing. Started at the
+    /// plan's original 45s, tuned to 20s after first real-kid testing felt
+    /// too slow to react, then tuned again to 10s after 20s still felt too
+    /// slow.
+    var silenceThresholdSeconds: TimeInterval = 10
 
     /// Volume threshold (dBFS) above which audio counts as "speech".
     /// Typical quiet room: -55 to -45 dBFS. Normal speaking voice a foot or
@@ -71,8 +73,9 @@ final class AudioSessionManager: ObservableObject {
     /// Starts monitoring + recording. Throws if mic permission wasn't
     /// granted or the audio session couldn't be configured. Must be called
     /// from the main thread (SwiftUI action handlers already are).
-    func start() throws {
+    func start() async throws {
         guard state == .idle else { return }
+        try await ensureMicrophonePermission()
         try configureSession()
         try startEngine()
         lastSpeechTime = Date()
@@ -80,6 +83,35 @@ final class AudioSessionManager: ObservableObject {
         state = .reading
         activeSeconds = 0
         startActiveTimer()
+    }
+
+    /// The likely cause of an early SIGABRT crash on `engine.inputNode`:
+    /// touching the audio engine without permission ever having been
+    /// granted (or even asked). Configuring an AVAudioSession category
+    /// alone does not reliably trigger the system permission prompt —
+    /// this requests it explicitly and waits for a real answer first.
+    private func ensureMicrophonePermission() async throws {
+        switch AVAudioApplication.shared.recordPermission {
+        case .granted:
+            return
+        case .denied:
+            throw NSError(
+                domain: "AudioSessionManager",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Microphone access was denied. Enable it in Settings > Privacy & Security > Microphone."]
+            )
+        case .undetermined:
+            let granted = await AVAudioApplication.requestRecordPermission()
+            if !granted {
+                throw NSError(
+                    domain: "AudioSessionManager",
+                    code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: "Microphone access was not granted."]
+                )
+            }
+        @unknown default:
+            return
+        }
     }
 
     /// Stops monitoring/recording. Returns the local file URL of the
