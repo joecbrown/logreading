@@ -23,7 +23,7 @@ function fakeEvent(childId, sessionId, status = 'COMPLETED', bucket = 'test-buck
     detail: {
       TranscriptionJobName: buildTranscribeJobName(childId, sessionId),
       TranscriptionJobStatus: status,
-      Media: { MediaFileUri: `s3://${bucket}/audio/${childId}/${sessionId}.caf` },
+      Media: { MediaFileUri: `s3://${bucket}/audio/${childId}/${sessionId}.wav` },
     },
   };
 }

@@ -22,8 +22,8 @@ exports.handler = async (event) => {
     const bucket = record.s3.bucket.name;
     const key = decodeURIComponent(record.s3.object.key.replace(/\+/g, ' '));
 
-    // Expected shape: audio/{childId}/{sessionId}.caf
-    const match = key.match(/^audio\/([^/]+)\/([^/]+)\.caf$/);
+    // Expected shape: audio/{childId}/{sessionId}.wav
+    const match = key.match(/^audio\/([^/]+)\/([^/]+)\.wav$/);
     if (!match) {
       console.log(`Skipping S3 object not matching expected audio path shape: ${key}`);
       continue;

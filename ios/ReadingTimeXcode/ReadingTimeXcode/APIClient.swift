@@ -106,7 +106,7 @@ final class APIClient {
         }
         var request = URLRequest(url: uploadUrl)
         request.httpMethod = "PUT"
-        request.setValue("audio/x-caf", forHTTPHeaderField: "Content-Type")
+        request.setValue("audio/wav", forHTTPHeaderField: "Content-Type")
 
         let (_, response): (Data, URLResponse)
         do {

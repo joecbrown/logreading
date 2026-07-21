@@ -96,7 +96,7 @@ async function run() {
     assert.ok(data.sessionId, 'should return a sessionId');
     assert.ok(data.uploadUrl.startsWith('https://'), 'should return a real-looking URL');
     assert.ok(data.uploadUrl.includes('test-reading-app-audio'), 'URL should reference the configured bucket');
-    assert.strictEqual(data.s3Key, `audio/emma/${data.sessionId}.caf`);
+    assert.strictEqual(data.s3Key, `audio/emma/${data.sessionId}.wav`);
   });
 
   await test('upload-url endpoint 500s clearly if AUDIO_BUCKET is not configured', async () => {
@@ -109,6 +109,15 @@ async function run() {
     );
     assert.strictEqual(res.statusCode, 500);
     process.env.AUDIO_BUCKET = original;
+  });
+
+  await test('upload-url rejects a childId with a space (would break the Transcribe job name)', async () => {
+    const res = await handler(
+      makeEvent({ method: 'POST', path: '/children/oj test4/sessions/upload-url', body: {} })
+    );
+    assert.strictEqual(res.statusCode, 400);
+    const data = JSON.parse(res.body);
+    assert.ok(data.error.includes('letters, numbers'));
   });
 
   await test('sessionId round-trips: log with sessionId, then questions route 404s until ready', async () => {

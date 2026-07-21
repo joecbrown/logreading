@@ -79,6 +79,17 @@ exports.handler = async (event) => {
     let match = path.match(/^\/children\/([^/]+)\/sessions\/upload-url\/?$/);
     if (match && method === 'POST') {
       const childId = decodeURIComponent(match[1]).toLowerCase();
+      // childId flows into Transcribe job names, which strictly only allow
+      // [0-9a-zA-Z._-] — a space (or other character) here would make the
+      // transcription job fail outright with a BadRequestException. Caught
+      // via real testing, not a hypothetical: reject clearly here instead
+      // of letting it fail deep in an async Lambda where it's much harder
+      // to notice.
+      if (!/^[0-9a-z._-]+$/.test(childId)) {
+        return json(400, {
+          error: 'childId must contain only letters, numbers, ., _, or - (no spaces or other characters)',
+        });
+      }
       const body = parseBody(event);
       const bucket = process.env.AUDIO_BUCKET;
       if (!bucket) {
@@ -86,7 +97,7 @@ exports.handler = async (event) => {
       }
 
       const sessionId = crypto.randomUUID();
-      const s3Key = `audio/${childId}/${sessionId}.caf`;
+      const s3Key = `audio/${childId}/${sessionId}.wav`;
       const nowIso = new Date().toISOString();
       const weekId = require('../lib/ledger').getWeekId(nowIso);
 
@@ -98,7 +109,7 @@ exports.handler = async (event) => {
 
       const uploadUrl = await getSignedUrl(
         s3Client,
-        new PutObjectCommand({ Bucket: bucket, Key: s3Key, ContentType: 'audio/x-caf' }),
+        new PutObjectCommand({ Bucket: bucket, Key: s3Key, ContentType: 'audio/wav' }),
         { expiresIn: 900 } // 15 minutes — plenty of time to upload right after a session ends
       );
 

@@ -195,7 +195,7 @@ final class AudioSessionManager: ObservableObject {
         let format = input.inputFormat(forBus: 0)
 
         let docsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let url = docsDir.appendingPathComponent("session-\(Int(Date().timeIntervalSince1970)).caf")
+        let url = docsDir.appendingPathComponent("session-\(Int(Date().timeIntervalSince1970)).wav")
         audioFile = try AVAudioFile(forWriting: url, settings: format.settings)
         recordingURL = url
 
