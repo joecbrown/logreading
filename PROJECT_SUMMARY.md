@@ -1,6 +1,6 @@
 # Reading Time / Electronics Bank App — Project Summary
 
-*Compiled July 20, 2026 (evening) — backend deployed and confirmed working end-to-end; iPad app tuned and confirmed working with real kids after a real debugging session, for context on resuming work.*
+*Compiled July 21, 2026 — backend deployed and confirmed working end-to-end; iPad app tuned and confirmed working with real kids; S3 + Transcribe + Claude question-generation pipeline built and tested (70 tests) but not yet deployed to AWS, for context on resuming work.*
 
 Repo: https://github.com/joecbrown/logreading
 
@@ -59,35 +59,73 @@ fallback only.
 
 ## What's Actually Built
 
-**Backend (Node.js, all executed and tested in a sandbox — 35 tests
-passing across 5 test files):**
+**Backend (Node.js, all executed and tested in a sandbox — 70 tests
+passing across 8 test files):**
 
 - **`lib/ledger.js`** — pure business rules: Sunday-anchored week
   calculation, bonus-hour math, pool accumulation/expiration, and
   word-count/WPM tracking (WPM is a minutes-weighted average across
-  sessions, not a naive mean — covered by a dedicated test). No AWS/Alexa
-  dependencies.
+  sessions, not a naive mean — covered by a dedicated test). Extended
+  this session with `sessionId` tracking and `attachWordCount` — a
+  session can be logged immediately (bonus hours locked in right away
+  from minutes alone) and have its real word count/WPM filled in later,
+  once transcription finishes asynchronously, without changing the
+  already-earned bonus hours. No AWS/Alexa dependencies.
 - **`lib/store.js`** / **`lib/dynamoStore.js`** — swappable storage
   (in-memory for tests, DynamoDB for real use). Single-table design:
-  partition key `childId`, sort key `recordType` (`WEEK#<weekId>` or
-  `SESSION`). Contract-tested against a mocked AWS client.
-- **`lib/ledgerStore.js`** — wires ledger rules to storage. Two logging
+  partition key `childId`, sort key `recordType` (`WEEK#<weekId>`,
+  `SESSION`, `PENDING#<sessionId>`, or `QUESTIONS#<sessionId>`).
+  Contract-tested against a mocked AWS client.
+- **`lib/ledgerStore.js`** — wires ledger rules to storage. Logging
   paths:
   - `startReading`/`stopReading` (wall-clock timestamps — used by the
     Alexa reference implementation)
   - `logCompletedSession` (caller-supplied duration — used by the REST
     API/iPad app, since the backend can't see on-device pauses)
+  - `attachWordCount` — fills in WPM on an already-logged session once
+    transcription completes
 - **`infra/table.json`** — CLI-creatable DynamoDB table definition
 - **`lambda/index.js`** + **`skill-package/`** — fully working Alexa skill
   (`ask-sdk-core`), kept as reference, not the active target
 - **`api/handler.js`** — **REST API for the iPad app** (API Gateway HTTP
-  API + Lambda). `POST /children/{childId}/sessions` logs a completed
-  session; `GET /children/{childId}/balance` returns the week's balance.
-  Same DynamoDB-or-memory storage switch as the Alexa handler. **Now
-  deployed to real AWS and confirmed working end-to-end** (see AWS
-  Deployment section below) — no longer just tested locally.
+  API + Lambda). Routes: session logging, balance, and (new this
+  session) `POST /children/{childId}/sessions/upload-url` (generates a
+  sessionId + a real presigned S3 URL — tested for real, not mocked,
+  since presigned URL generation is local HMAC signing and only needs
+  validly-shaped credentials) and
+  `GET /children/{childId}/sessions/{sessionId}/questions`. Same
+  DynamoDB-or-memory storage switch as the Alexa handler. **Deployed to
+  real AWS and confirmed working end-to-end** (see AWS Deployment
+  section below) — though the new upload-url/questions routes specifically
+  are tested locally only, not yet deployed (see Transcription Pipeline
+  Deployment section).
+- **`lib/transcriptHelpers.js`** (new this session) — pure logic for the
+  transcription pipeline: builds/parses the Transcribe job name encoding
+  (childId, sessionId) together (since Transcribe's completion event
+  only gives back the job name, no way to attach other metadata to a
+  job), extracts transcript text + word count from Transcribe's output
+  JSON shape, builds the Claude prompt, parses Claude's response. Fully
+  unit tested (12 tests), no AWS/network dependencies.
+- **`transcribe/start.js`** (new this session) — Lambda meant to be
+  triggered by an S3 upload event; starts an Amazon Transcribe job for
+  the new audio. Tested against a mocked Transcribe client, including a
+  case for duplicate/retried S3 events (treated as fine, not an error).
+- **`transcribe/complete.js`** (new this session) — Lambda meant to be
+  triggered by Transcribe job completion (via EventBridge — Transcribe
+  has no direct Lambda trigger, hence needing this indirection); fetches
+  the transcript from S3, updates the ledger with real word count/WPM via
+  `attachWordCount`, calls the Claude API to generate comprehension
+  questions grounded in the actual transcript, stores them. **Tested
+  graceful degradation**: word count/WPM still succeeds even if the
+  Claude API call fails — a transcription-quality/API issue shouldn't
+  also break the numbers that matter for bonus-hour tracking. The Claude
+  API call itself is mocked in tests (via a monkey-patched
+  `global.fetch`), not exercised for real — that's the one piece of this
+  pipeline that genuinely can't be verified without a real API key and
+  deployed infrastructure.
 - **`.env.example`** — placeholder template for future AWS/SES/SNS/Twilio/
-  Claude API credentials. Real `.env` is gitignored.
+  Claude API credentials, now including `AUDIO_BUCKET`. Real `.env` is
+  gitignored.
 
 **iPad app (Swift/SwiftUI, source in
 `ios/ReadingTimeXcode/ReadingTimeXcode/` — see note on this path below) —
@@ -173,6 +211,18 @@ and confirmed talking to the real deployed AWS backend:**
   explorer — not a mocked or local-only test.
 - `ios/README.md` documents current setup/rebuild notes, including the
   file-location lesson from bug #2 above.
+- **New this session, written but not yet run:** `APIClient.swift` now
+  requests a presigned upload URL, uploads recorded audio directly to S3
+  (bypassing the API/Lambda for the actual transfer, since a multi-minute
+  recording is too large for API Gateway's payload limits), and fetches
+  generated questions. `ReadingSessionViewModel.swift`'s `stopSession()`
+  now orchestrates the full sequence, with the upload step deliberately
+  best-effort — if it fails, the session still logs with just
+  minutesRead, so bonus-hour tracking never depends on the transcription
+  pipeline working. A "Check for Comprehension Questions" button was
+  added to the UI. None of this has been compiled/run yet, and the
+  backend pipeline it talks to isn't deployed yet either (see below) —
+  so this is the least-verified code in the project right now.
 
 **Known limitations of what's built, going in eyes-open:**
 - Volume-threshold detection still isn't real speech recognition — the
@@ -185,7 +235,9 @@ and confirmed talking to the real deployed AWS backend:**
   register it), not yet done. Volume levels/background noise will likely
   need retuning again once that happens — Simulator uses the Mac's own
   room and mic, not wherever the iPad actually sits.
-- Recorded audio is captured locally but nothing uploads it anywhere yet.
+- Recorded audio upload code is written (see above) but unverified — the
+  audio was previously just captured locally with nowhere to go; now
+  there's a real upload path, but it hasn't been exercised yet.
 - **The deployed API has no authentication** — see the AWS Deployment
   section below.
 
@@ -231,12 +283,36 @@ out of every file in this repo, including this one), but worth adding
 (an API key, or IAM-based auth on the routes) before this is more than a
 personal/family project. Tracked as a next step below.
 
+## Transcription Pipeline Deployment — ❌ NOT done yet (this session's next step)
+
+Everything code-side is built and tested (see above), but none of the
+following exists in AWS yet:
+
+1. **S3 bucket** for session audio + Transcribe output
+2. **Lambda `ReadingAppTranscribeStart`** (from `transcribe/start.js`),
+   triggered by S3 object-create events on that bucket, needs
+   `transcribe:StartTranscriptionJob` + S3 read/write permissions
+3. **Lambda `ReadingAppTranscribeComplete`** (from
+   `transcribe/complete.js`), needs `READING_APP_TABLE` +
+   `ANTHROPIC_API_KEY` env vars, DynamoDB + S3-read permissions
+4. **EventBridge rule** matching Transcribe job state changes, targeting
+   the completion Lambda — this is the only way to know when a
+   transcription job finishes; Transcribe has no direct Lambda trigger
+5. **A real Claude/Anthropic API key** — not yet obtained/configured
+   anywhere
+
+Full step-by-step walkthrough is in the main README's "Deploying the
+Transcription Pipeline" section. This is a genuinely bigger lift than the
+REST API deployment was (more services, an indirection through
+EventBridge that has no earlier analog in this project) — expect it to
+take a full session on its own, likely with new console-navigation
+surprises the way Lambda's and API Gateway's UIs each had their own.
+
 ## Not Yet Built
 
-1. **Add API authentication** (see security note above)
-2. **S3 + Amazon Transcribe pipeline** — iPad uploads session audio → S3 →
-   Transcribe → word count/WPM → transcript handed to Claude for
-   comprehension questions grounded in the actual text read
+1. **Deploy the transcription pipeline** (see dedicated section above —
+   code is done, AWS infrastructure isn't)
+2. **Add API authentication** (see security note above)
 3. **Per-session notifications** — SMS + email, triggered right after a
    session logs (SES for email; SNS or Twilio for SMS, not yet decided)
 4. **Web dashboard** — read-only view of the ledger; the REST API's
@@ -244,9 +320,11 @@ personal/family project. Tracked as a next step below.
 5. **Real iPad device testing** — Simulator only so far, even for the
    real-kids test; a physical device may behave differently and likely
    need further threshold retuning (different room, different mic)
-6. Wire real credentials into `.env` for AWS/notifications/Claude API
+6. **Test the new upload/questions flow** in the iPad app once the
+   backend pipeline is deployed — currently unverified
+7. Wire real credentials into `.env` for AWS/notifications/Claude API
 
-No preference has been stated on ordering among items 2–4 — open decision
+No preference has been stated on ordering among items 3–4 — open decision
 for later.
 
 **Phase 2 (parked, not a near-term priority):** actually locking the

@@ -1,6 +1,15 @@
 // test/apiHandler.test.js — run with: node test/apiHandler.test.js
 
 const assert = require('assert');
+
+// Presigned URL generation only needs *validly-shaped* credentials — it's
+// pure local HMAC signing, no network call, so fake values are enough to
+// test the actual logic (bucket, key, expiry) rather than mocking it away.
+process.env.AWS_ACCESS_KEY_ID ||= 'test-access-key-id';
+process.env.AWS_SECRET_ACCESS_KEY ||= 'test-secret-access-key';
+process.env.AWS_REGION ||= 'us-east-2';
+process.env.AUDIO_BUCKET = 'test-reading-app-audio';
+
 const { handler } = require('../api/handler');
 
 function makeEvent({ method, path, body }) {
@@ -72,6 +81,53 @@ async function run() {
     const res = await handler(makeEvent({ method: 'OPTIONS', path: '/children/amir/sessions' }));
     assert.strictEqual(res.statusCode, 204);
     assert.strictEqual(res.headers['Access-Control-Allow-Origin'], '*');
+  });
+
+  await test('POST /children/:id/sessions/upload-url returns a real presigned URL', async () => {
+    const res = await handler(
+      makeEvent({
+        method: 'POST',
+        path: '/children/emma/sessions/upload-url',
+        body: { grade: '6th grade' },
+      })
+    );
+    assert.strictEqual(res.statusCode, 200);
+    const data = JSON.parse(res.body);
+    assert.ok(data.sessionId, 'should return a sessionId');
+    assert.ok(data.uploadUrl.startsWith('https://'), 'should return a real-looking URL');
+    assert.ok(data.uploadUrl.includes('test-reading-app-audio'), 'URL should reference the configured bucket');
+    assert.strictEqual(data.s3Key, `audio/emma/${data.sessionId}.caf`);
+  });
+
+  await test('upload-url endpoint 500s clearly if AUDIO_BUCKET is not configured', async () => {
+    const original = process.env.AUDIO_BUCKET;
+    delete process.env.AUDIO_BUCKET;
+    // Re-require isn't needed — the handler reads process.env.AUDIO_BUCKET
+    // at request time, not at module load time.
+    const res = await handler(
+      makeEvent({ method: 'POST', path: '/children/emma/sessions/upload-url', body: {} })
+    );
+    assert.strictEqual(res.statusCode, 500);
+    process.env.AUDIO_BUCKET = original;
+  });
+
+  await test('sessionId round-trips: log with sessionId, then questions route 404s until ready', async () => {
+    const logRes = await handler(
+      makeEvent({
+        method: 'POST',
+        path: '/children/amir/sessions',
+        body: { minutesRead: 15, sessionId: 'linked-session-1' },
+      })
+    );
+    assert.strictEqual(logRes.statusCode, 200);
+    const logData = JSON.parse(logRes.body);
+    assert.strictEqual(logData.sessionId, 'linked-session-1');
+
+    // Questions haven't been generated yet (that's a separate, async Lambda)
+    const qRes = await handler(
+      makeEvent({ method: 'GET', path: '/children/amir/sessions/linked-session-1/questions' })
+    );
+    assert.strictEqual(qRes.statusCode, 404);
   });
 
   console.log('\nAll API handler tests completed.');

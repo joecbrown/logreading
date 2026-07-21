@@ -42,6 +42,37 @@ struct ReadingSessionView: View {
                 }
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+
+                if result.sessionId != nil && viewModel.questions == nil {
+                    Button {
+                        Task { await viewModel.checkForQuestions() }
+                    } label: {
+                        if viewModel.isCheckingForQuestions {
+                            ProgressView()
+                        } else {
+                            Text("Check for Comprehension Questions")
+                        }
+                    }
+                    .font(.footnote)
+                    .disabled(viewModel.isCheckingForQuestions)
+                }
+            }
+
+            if let questions = viewModel.questions {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Comprehension Questions")
+                        .font(.headline)
+                    ForEach(questions) { q in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(q.question).font(.subheadline.bold())
+                            Text(q.guidance).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
+                .background(Color.secondary.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
             }
 
             if let balance = viewModel.balance {

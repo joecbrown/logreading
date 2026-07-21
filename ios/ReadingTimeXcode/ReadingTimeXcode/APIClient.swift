@@ -45,8 +45,10 @@ final class APIClient {
 
     /// Logs a completed session. minutesRead should already be net of any
     /// local auto-pauses — the backend has no visibility into pauses that
-    /// happened on-device, so it trusts this value as-is.
-    func logSession(childId: String, minutesRead: Double, wordsRead: Int? = nil) async throws -> SessionLogResponse {
+    /// happened on-device, so it trusts this value as-is. Pass sessionId
+    /// (from requestUploadUrl, below) to link this entry to whatever
+    /// transcription/WPM/questions complete for it later.
+    func logSession(childId: String, minutesRead: Double, wordsRead: Int? = nil, sessionId: String? = nil) async throws -> SessionLogResponse {
         guard let base = baseURL else { throw APIError.notConfigured }
         let url = base.appendingPathComponent("children/\(childId)/sessions")
 
@@ -58,6 +60,9 @@ final class APIClient {
         if let wordsRead {
             body["wordsRead"] = wordsRead
         }
+        if let sessionId {
+            body["sessionId"] = sessionId
+        }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         return try await send(request, as: SessionLogResponse.self)
@@ -68,6 +73,65 @@ final class APIClient {
         let url = base.appendingPathComponent("children/\(childId)/balance")
         let request = URLRequest(url: url)
         return try await send(request, as: BalanceResponse.self)
+    }
+
+    /// Requests a sessionId + presigned S3 upload URL for this child's
+    /// recording. Call this BEFORE logSession, then uploadAudio, then
+    /// logSession with the returned sessionId — see
+    /// ReadingSessionViewModel.stopSession for the full sequence.
+    func requestUploadUrl(childId: String, grade: String?) async throws -> UploadUrlResponse {
+        guard let base = baseURL else { throw APIError.notConfigured }
+        let url = base.appendingPathComponent("children/\(childId)/sessions/upload-url")
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var body: [String: Any] = [:]
+        if let grade {
+            body["grade"] = grade
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        return try await send(request, as: UploadUrlResponse.self)
+    }
+
+    /// Uploads the recorded audio file directly to S3 using a presigned
+    /// URL — this does NOT go through our API/Lambda at all, since a
+    /// multi-minute recording is far too large for API Gateway's payload
+    /// limits. This is a plain S3 PUT, not our usual JSON request/response
+    /// shape, so it doesn't go through `send(_:as:)`.
+    func uploadAudio(fileURL: URL, to uploadUrlString: String) async throws {
+        guard let uploadUrl = URL(string: uploadUrlString) else {
+            throw APIError.server("Invalid upload URL received from server")
+        }
+        var request = URLRequest(url: uploadUrl)
+        request.httpMethod = "PUT"
+        request.setValue("audio/x-caf", forHTTPHeaderField: "Content-Type")
+
+        let (_, response): (Data, URLResponse)
+        do {
+            (_, response) = try await URLSession.shared.upload(for: request, fromFile: fileURL)
+        } catch {
+            throw APIError.network(error)
+        }
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw APIError.server("Audio upload failed")
+        }
+    }
+
+    /// Fetches generated comprehension questions for a session, once the
+    /// async transcription pipeline has finished. Returns nil (not an
+    /// error) if they're not ready yet — the caller can retry later
+    /// rather than treating a 404 as a real failure.
+    func getQuestions(childId: String, sessionId: String) async throws -> QuestionsResponse? {
+        guard let base = baseURL else { throw APIError.notConfigured }
+        let url = base.appendingPathComponent("children/\(childId)/sessions/\(sessionId)/questions")
+        let request = URLRequest(url: url)
+        do {
+            return try await send(request, as: QuestionsResponse.self)
+        } catch APIError.server(let message) where message.contains("not ready") {
+            return nil
+        }
     }
 
     private func send<T: Decodable>(_ request: URLRequest, as type: T.Type) async throws -> T {
