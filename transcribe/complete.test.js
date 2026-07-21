@@ -12,18 +12,22 @@ const { mockClient } = require('aws-sdk-client-mock');
 const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
 
 process.env.ANTHROPIC_API_KEY = 'test-key-not-real';
+process.env.AUDIO_BUCKET = 'test-bucket';
 
 const { handler, testHelpers } = require('./complete');
 const { buildTranscribeJobName } = require('../lib/transcriptHelpers');
 
 const s3Mock = mockClient(S3Client);
 
-function fakeEvent(childId, sessionId, status = 'COMPLETED', bucket = 'test-bucket') {
+// Mirrors the ACTUAL EventBridge "Transcribe Job State Change" event shape —
+// just job name + status, nothing else. An earlier version of this test
+// (and of transcribe/complete.js) incorrectly assumed a Media field would
+// be present; real testing showed it isn't.
+function fakeEvent(childId, sessionId, status = 'COMPLETED') {
   return {
     detail: {
       TranscriptionJobName: buildTranscribeJobName(childId, sessionId),
       TranscriptionJobStatus: status,
-      Media: { MediaFileUri: `s3://${bucket}/audio/${childId}/${sessionId}.wav` },
     },
   };
 }

@@ -92,16 +92,17 @@ exports.handler = async (event) => {
     return { error: 'no_pending_session' };
   }
 
-  // OutputBucketName was set to the same bucket the audio was uploaded
-  // to (see transcribe/start.js) — read it back from the job's media URI
-  // in the event, rather than needing a separate env var here too.
-  const mediaUri = detail.Media?.MediaFileUri || '';
-  const bucketMatch = mediaUri.match(/^s3:\/\/([^/]+)\//);
-  if (!bucketMatch) {
-    console.error(`Could not determine bucket from job detail: ${JSON.stringify(detail)}`);
-    return { error: 'unknown_bucket' };
+  // Originally this tried to read the bucket back from detail.Media.MediaFileUri
+  // in the EventBridge event — that was wrong. The actual "Transcribe Job
+  // State Change" event is minimal (just job name + status), it does NOT
+  // include the job's Media/output configuration. Found via real testing:
+  // the field was simply absent. Since this pipeline always uses one
+  // fixed bucket anyway, an env var is both simpler and correct.
+  const bucket = process.env.AUDIO_BUCKET;
+  if (!bucket) {
+    console.error('AUDIO_BUCKET environment variable is not configured');
+    return { error: 'missing_audio_bucket_config' };
   }
-  const bucket = bucketMatch[1];
 
   const outputJson = await fetchJsonFromS3(bucket, transcriptOutputKey(childId, sessionId));
   const { transcript, wordCount } = extractTranscriptAndWordCount(outputJson);
