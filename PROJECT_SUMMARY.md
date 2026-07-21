@@ -1,6 +1,6 @@
 # Reading Time / Electronics Bank App — Project Summary
 
-*Compiled July 21, 2026 — backend deployed and confirmed working end-to-end; iPad app tuned and confirmed working with real kids; S3 + Transcribe + Claude question-generation pipeline built and tested (70 tests) but not yet deployed to AWS, for context on resuming work.*
+*Compiled July 21, 2026 — backend deployed and confirmed working end-to-end; iPad app tuned and confirmed working with real kids; S3 + Transcribe + Claude question-generation pipeline built and tested (70 tests), AWS deployment in progress but currently blocked on an Anthropic Console billing issue, for context on resuming work.*
 
 Repo: https://github.com/joecbrown/logreading
 
@@ -283,35 +283,67 @@ out of every file in this repo, including this one), but worth adding
 (an API key, or IAM-based auth on the routes) before this is more than a
 personal/family project. Tracked as a next step below.
 
-## Transcription Pipeline Deployment — ❌ NOT done yet (this session's next step)
+## Transcription Pipeline Deployment — 🚧 In progress, blocked on Anthropic billing
 
-Everything code-side is built and tested (see above), but none of the
-following exists in AWS yet:
+**Region: `us-east-2`, same as everything else.**
 
-1. **S3 bucket** for session audio + Transcribe output
-2. **Lambda `ReadingAppTranscribeStart`** (from `transcribe/start.js`),
-   triggered by S3 object-create events on that bucket, needs
-   `transcribe:StartTranscriptionJob` + S3 read/write permissions
-3. **Lambda `ReadingAppTranscribeComplete`** (from
-   `transcribe/complete.js`), needs `READING_APP_TABLE` +
-   `ANTHROPIC_API_KEY` env vars, DynamoDB + S3-read permissions
-4. **EventBridge rule** matching Transcribe job state changes, targeting
-   the completion Lambda — this is the only way to know when a
-   transcription job finishes; Transcribe has no direct Lambda trigger
-5. **A real Claude/Anthropic API key** — not yet obtained/configured
-   anywhere
+**Completed so far:**
+1. ✅ S3 bucket created (session audio + Transcribe output land here)
+2. ✅ Lambda `ReadingAppTranscribeStart` created, code uploaded (from
+   `lambda-transcribe-start.zip` — a minimal deployment package with just
+   `transcribe/start.js` + `lib/transcriptHelpers.js` + the
+   `@aws-sdk/client-transcribe` dependency, locally verified to load and
+   run correctly before handing over), handler set to
+   `transcribe/start.handler`
+3. ✅ That Lambda's execution role granted `AmazonTranscribeFullAccess`
+   and `AmazonS3FullAccess` (broad, same practical tradeoff as elsewhere)
+4. ✅ S3 event notification configured: object-create events with prefix
+   `audio/` → triggers `ReadingAppTranscribeStart`
+5. ✅ Lambda `ReadingAppTranscribeComplete` created, code uploaded (from
+   `lambda-transcribe-complete.zip` — `transcribe/complete.js` +
+   `lib/{transcriptHelpers,store,dynamoStore,ledgerStore,ledger}.js` +
+   S3/DynamoDB SDK deps, also locally verified before handing over),
+   handler set to `transcribe/complete.handler`
+6. ✅ `READING_APP_TABLE=ReadingAppTable` environment variable set on
+   that Lambda
 
-Full step-by-step walkthrough is in the main README's "Deploying the
-Transcription Pipeline" section. This is a genuinely bigger lift than the
-REST API deployment was (more services, an indirection through
-EventBridge that has no earlier analog in this project) — expect it to
-take a full session on its own, likely with new console-navigation
-surprises the way Lambda's and API Gateway's UIs each had their own.
+**Blocked here:** the `ANTHROPIC_API_KEY` environment variable needs a
+real key, which needs a working Anthropic Console (developer platform,
+separate product/billing from a claude.ai subscription — confirmed via
+Anthropic's own support docs that these are unrelated even though it's
+the same company) account with billing set up. **Billing setup is
+currently failing** with a generic "Payment failed" error, tried across
+multiple cards — search turned up several independent, similar reports
+over recent months, suggesting this may be a real issue on Anthropic's
+side rather than anything wrong with the cards tried. Anthropic's own
+support (support.anthropic.com) is the next avenue, not something
+resolvable from this end.
+
+**Not yet reached (resume here once the API key situation is sorted):**
+1. Grant `ReadingAppTranscribeComplete`'s execution role
+   `AmazonDynamoDBFullAccess` + `AmazonS3ReadOnlyAccess`
+2. Add the `ANTHROPIC_API_KEY` environment variable once a working key
+   exists
+3. Create the **EventBridge rule**: source "aws.transcribe", event type
+   "Transcribe Job State Change", target = `ReadingAppTranscribeComplete`
+   — this is the missing link between "transcription finished" and the
+   completion Lambda actually running (Transcribe has no direct Lambda
+   trigger)
+4. End-to-end test: real reading session in the iPad app → confirm audio
+   lands in S3 → confirm a Transcribe job starts and completes → confirm
+   the DynamoDB entry gets `wordsPerMinute` filled in → confirm questions
+   appear via the app's "Check for Comprehension Questions" button
+5. Test the iPad app's new upload/questions code for the first time
+   (written this session, never run — see iPad app section above)
+
+Full step-by-step walkthrough (matching what's already been done) is in
+the main README's "Deploying the Transcription Pipeline" section.
 
 ## Not Yet Built
 
-1. **Deploy the transcription pipeline** (see dedicated section above —
-   code is done, AWS infrastructure isn't)
+1. **Finish deploying the transcription pipeline** — blocked on an
+   Anthropic Console billing issue (see dedicated section above for the
+   exact resume point: 4 concrete remaining steps once unblocked)
 2. **Add API authentication** (see security note above)
 3. **Per-session notifications** — SMS + email, triggered right after a
    session logs (SES for email; SNS or Twilio for SMS, not yet decided)
@@ -320,9 +352,7 @@ surprises the way Lambda's and API Gateway's UIs each had their own.
 5. **Real iPad device testing** — Simulator only so far, even for the
    real-kids test; a physical device may behave differently and likely
    need further threshold retuning (different room, different mic)
-6. **Test the new upload/questions flow** in the iPad app once the
-   backend pipeline is deployed — currently unverified
-7. Wire real credentials into `.env` for AWS/notifications/Claude API
+6. Wire real credentials into `.env` for AWS/notifications/Claude API
 
 No preference has been stated on ordering among items 3–4 — open decision
 for later.
