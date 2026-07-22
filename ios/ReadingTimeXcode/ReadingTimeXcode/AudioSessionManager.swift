@@ -89,7 +89,7 @@ final class AudioSessionManager: ObservableObject {
     /// softest reading moments — rather than the original -35 guess,
     /// which turned out to be louder than the actual reading volume,
     /// meaning it was never triggering at all.
-    var silenceThresholdDB: Float = -48
+    var silenceThresholdDB: Float = -65
 
     private let engine = AVAudioEngine()
     private var audioFile: AVAudioFile?

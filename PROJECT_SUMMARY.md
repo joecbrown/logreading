@@ -1,6 +1,6 @@
 # Reading Time / Electronics Bank App — Project Summary
 
-*Compiled July 21, 2026 (night) — the ENTIRE pipeline is now deployed and confirmed working end-to-end: iPad app → S3 → Amazon Transcribe → DynamoDB → Claude → real comprehension questions, all verified with a real reading session, not just individually tested pieces. For context on resuming work.*
+*Compiled July 22, 2026 (night) — the entire system is real and in daily use: full pipeline confirmed end-to-end, email notifications working, running on a real physical iPad (not just Simulator), and auto-pause tuned against two different kids' voices with real measured data. For context on resuming work.*
 
 Repo: https://github.com/joecbrown/logreading
 
@@ -139,16 +139,30 @@ and confirmed talking to the real deployed AWS backend:**
   working end-to-end, including two full rounds of real-world tuning:**
   - **Silence duration**, tuned twice: 45s (original plan value) → 20s
     (first real-kid test felt too slow) → **10s** (still felt too slow at
-    20s)
-  - **Volume threshold**, discovered broken then fixed: originally a
-    guess of -35 dB, which turned out to be *louder* than actual reading
-    volume — meaning it never triggered at all (the app was pausing at
-    exactly the 10s mark regardless of whether anyone was reading, since
-    it never once detected "speech"). Diagnosed by adding a live
-    on-screen debug readout of the actual measured dB level
-    (`currentDecibels`) rather than continuing to guess. Real numbers
-    measured: quiet room ≈ -56 dB, actual reading aloud ≈ -38 to -41 dB.
-    New threshold: **-48 dB**, sitting with real margin on both sides.
+    20s) — settled here, unchanged since
+  - **Volume threshold**, tuned across four values as real data came in
+    from two different kids' voices:
+    - -35 (initial guess) → too loud, never triggered at all — the app
+      was pausing at exactly the 10s mark regardless of whether anyone
+      was reading, since it never once detected "speech." Diagnosed by
+      adding a live on-screen debug readout (`currentDecibels`) instead
+      of continuing to guess.
+    - -48 (tuned to one reader's voice: quiet room ≈ -56 dB, reading
+      ≈ -38 to -41 dB) — worked well for that reader.
+    - -60 (a second, quieter-voiced reader measured -55 to -61 dB —
+      below the -48 threshold entirely, causing false pauses even while
+      actively reading).
+    - **-65** (that same reader's actual room measured ambient noise at
+      -70 dB — real data, not a guess — giving confirmed margin on both
+      sides: his voice stays well above -65, the room's silence stays
+      well below it). **This is the current, final value.**
+    - **Known limitation, stated plainly:** this is one global value now
+      serving two meaningfully different voices. It works for both as of
+      real measurements taken, but if a third voice (or a different
+      room) doesn't fit comfortably in the gap between ambient noise and
+      reading volume, the real fix is making this a **per-child setting**
+      rather than one shared constant — not built, but the clear next
+      step if -65 ever stops working well for someone.
   - **Sustained-loudness requirement added**, after the above fix
     revealed a second issue: brief loud transients (keyboard clicks near
     the Mac's mic in Simulator) were being detected as "speech" too.
@@ -157,12 +171,17 @@ and confirmed talking to the real deployed AWS backend:**
     long enough to reliably catch genuine reading, short enough to still
     feel responsive, while filtering out sharp single-buffer spikes.
 - **`APIClient.swift`** — calls the REST API; base URL configured in-app
-  (Settings screen), now pointed at the real deployed API Gateway URL
+  (Settings screen), pointed at the real deployed API Gateway URL.
+  Requests a presigned upload URL, uploads recorded audio directly to S3
+  (bypassing the API/Lambda for the actual transfer, since a multi-minute
+  recording is too large for API Gateway's payload limits), and fetches
+  generated questions. **All of this is now confirmed working end-to-end
+  via a real reading session** — not just written and hoped-for.
 - **`ChildStore.swift`** — local child profiles (name/grade), since the
   backend has no concept of "which kids exist," just childIds on sessions
 - Views: child list → add-reader form → reading session (start/stop, live
-  status badge, timer, live mic-level debug readout, balance display) →
-  settings
+  status badge, timer, live mic-level debug readout, balance display,
+  "Check for Comprehension Questions" button) → settings
 - **Bugs found and fixed via actual manual testing, not just code
   review** (in the order discovered):
   1. App crashed (`SIGABRT` on `engine.inputNode`) the first time "Start
@@ -211,35 +230,41 @@ and confirmed talking to the real deployed AWS backend:**
   explorer — not a mocked or local-only test.
 - `ios/README.md` documents current setup/rebuild notes, including the
   file-location lesson from bug #2 above.
-- **New this session, written but not yet run:** `APIClient.swift` now
-  requests a presigned upload URL, uploads recorded audio directly to S3
-  (bypassing the API/Lambda for the actual transfer, since a multi-minute
-  recording is too large for API Gateway's payload limits), and fetches
-  generated questions. `ReadingSessionViewModel.swift`'s `stopSession()`
-  now orchestrates the full sequence, with the upload step deliberately
-  best-effort — if it fails, the session still logs with just
-  minutesRead, so bonus-hour tracking never depends on the transcription
-  pipeline working. A "Check for Comprehension Questions" button was
-  added to the UI. None of this has been compiled/run yet, and the
-  backend pipeline it talks to isn't deployed yet either (see below) —
-  so this is the least-verified code in the project right now.
+- **Email notifications**: after Claude generates questions, the child's
+  display name (now threaded through the upload-url request, alongside
+  grade) and the questions are emailed via Amazon SES to a fixed list of
+  recipients (`NOTIFICATION_EMAILS` env var). Independently non-blocking,
+  same philosophy as question generation itself — an email failure
+  (e.g. SES sandbox rejecting an unverified recipient) never undoes the
+  already-saved questions, which remain visible in the app regardless.
+  **Confirmed working** — first email landed in spam (expected for a
+  brand-new sender with no reputation yet; "Report not spam" in Gmail
+  helps train this over the first several sends).
+- **Deployed to a real physical iPad**, not just Simulator, for the first
+  time. Required working through: USB trust prompt, Xcode's device
+  destination selector (easy to accidentally leave on Simulator even with
+  a real device plugged in), a keychain permission prompt for the code
+  signing tool (wants your **Mac login password**, not any project
+  credential), and — the one that actually blocked the app from
+  launching — trusting the developer certificate on the device itself
+  (Settings → General → VPN & Device Management → the entry under
+  "Developer App" → Trust). None of these are code issues; all are
+  standard one-time steps for a first on-device deployment with a free
+  Personal Team.
 
 **Known limitations of what's built, going in eyes-open:**
 - Volume-threshold detection still isn't real speech recognition — the
   sustained-loudness fix reduces false positives from brief sounds, but
   can't distinguish sustained reading from other sustained sounds (a TV,
   someone else talking nearby).
-- Not yet tested on a real device — only Simulator so far (using the
-  Mac's mic, even for the real-kids testing). Real-device testing requires
-  the device-signing step (plugging the iPad into the Mac, letting Xcode
-  register it), not yet done. Volume levels/background noise will likely
-  need retuning again once that happens — Simulator uses the Mac's own
-  room and mic, not wherever the iPad actually sits.
-- Recorded audio upload code is written (see above) but unverified — the
-  audio was previously just captured locally with nowhere to go; now
-  there's a real upload path, but it hasn't been exercised yet.
-- **The deployed API has no authentication** — see the AWS Deployment
-  section below.
+- **One global volume threshold serves multiple kids' voices** — currently
+  tuned (-65 dB) with real confirmed margin for both kids based on actual
+  measurements, but this is inherently a compromise, not a per-child
+  solution. Worth revisiting if a future reader's voice doesn't fit the
+  gap between their room's ambient noise and their reading volume.
+- **The deployed API has no authentication** — anyone with the invoke URL
+  could hit it. Low practical risk (URL isn't published anywhere), but
+  worth adding before this is more than a personal project.
 
 ## AWS Deployment — ✅ Complete and confirmed end-to-end
 
@@ -353,16 +378,20 @@ does.
 ## Not Yet Built
 
 1. **Add API authentication** (see security note above)
-2. **Per-session notifications** — SMS + email, triggered right after a
-   session logs (SES for email; SNS or Twilio for SMS, not yet decided)
+2. **SMS notifications** — email is done (SES); text messages were also
+   originally discussed but never built (SNS or Twilio, not yet decided)
 3. **Web dashboard** — read-only view of the ledger; the REST API's
    balance route already supports this
-4. **Real iPad device testing** — Simulator only so far, even for the
-   real-kids test; a physical device may behave differently and likely
-   need further threshold retuning (different room, different mic)
-5. Wire real credentials into `.env` for AWS/notifications/Claude API
+4. **Per-child adjustable volume threshold** — currently one global
+   value tuned to work for both kids; would be more robust as a setting
+   stored per child (alongside grade), tuned once per kid using the
+   existing live debug readout
+5. Wire remaining real credentials into `.env` for local dev parity (AWS
+   access keys, Claude API key) — the deployed Lambdas already have their
+   own env vars set directly in AWS Console, this is just about local
+   `.env` completeness
 
-No preference has been stated on ordering among items 2–3 — open decision
+No preference has been stated on ordering among items 1–4 — open decision
 for later.
 
 **Phase 2 (parked, not a near-term priority):** actually locking the
@@ -371,6 +400,19 @@ current parent-enforced honor system for spending earned time.
 
 ## Git / Learning Notes
 
+- **Tonight's specific mixup, worth remembering:** a small threshold
+  tweak was packaged as a zip whose internal path already matched the
+  deep `ios/ReadingTimeXcode/ReadingTimeXcode/` folder, but the
+  extraction instructions said to `cd` into that same folder first —
+  which recreated the whole path a second time, nested inside itself.
+  The edit landed in a disconnected, unused copy; Xcode kept compiling
+  the real (unchanged) file the whole time, with no error to signal
+  anything was wrong other than the value just not changing. Resolved by
+  editing the real file directly in Xcode (Cmd+F to find the line, edit,
+  Cmd+S), then deleting the stray nested folder. **Going forward, small
+  one-line value changes get described as "find this line in Xcode and
+  change it," not shipped as a zip** — more reliable given this exact
+  failure mode already happened once.
 - Repo live at `https://github.com/joecbrown/logreading`, connected and
   working
 - **Anthropic Console billing issue from earlier resolved** — the
