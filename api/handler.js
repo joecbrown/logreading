@@ -104,6 +104,7 @@ exports.handler = async (event) => {
       await store.setPendingSession(childId, sessionId, {
         weekId,
         grade: typeof body.grade === 'string' ? body.grade : null,
+        displayName: typeof body.displayName === 'string' ? body.displayName : null,
         createdAt: nowIso,
       });
 

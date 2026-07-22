@@ -10,14 +10,18 @@
 const assert = require('assert');
 const { mockClient } = require('aws-sdk-client-mock');
 const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
+const { SESClient, SendEmailCommand } = require('@aws-sdk/client-ses');
 
 process.env.ANTHROPIC_API_KEY = 'test-key-not-real';
 process.env.AUDIO_BUCKET = 'test-bucket';
+process.env.SES_FROM_EMAIL = 'reading-app@example.com';
+process.env.NOTIFICATION_EMAILS = 'joe@example.com, wife@example.com';
 
 const { handler, testHelpers } = require('./complete');
 const { buildTranscribeJobName } = require('../lib/transcriptHelpers');
 
 const s3Mock = mockClient(S3Client);
+const sesMock = mockClient(SESClient);
 
 // Mirrors the ACTUAL EventBridge "Transcribe Job State Change" event shape —
 // just job name + status, nothing else. An earlier version of this test
@@ -76,8 +80,10 @@ async function run() {
     assert.strictEqual(result.error, 'no_pending_session');
   });
 
-  await test('full happy path: attaches word count and generates questions', async () => {
+  await test('full happy path: attaches word count, generates questions, and emails them', async () => {
     s3Mock.reset();
+    sesMock.reset();
+    sesMock.on(SendEmailCommand).resolves({});
     const originalFetch = global.fetch;
     try {
       // Set up: a session was logged, and an upload-url request left a
@@ -92,6 +98,7 @@ async function run() {
       await testHelpers.store.setPendingSession('emma', 'session-happy', {
         weekId: logResult.weekId,
         grade: '6th grade',
+        displayName: 'Emma',
         createdAt: '2026-07-20T16:00:00.000Z',
       });
 
@@ -112,13 +119,23 @@ async function run() {
       // Pending record should be cleaned up after processing
       const stillPending = await testHelpers.store.getPendingSession('emma', 'session-happy');
       assert.strictEqual(stillPending, null);
+
+      // Email was sent to both configured recipients, addressed by name
+      const emailCall = sesMock.commandCalls(SendEmailCommand)[0];
+      assert.deepStrictEqual(emailCall.args[0].input.Destination.ToAddresses, [
+        'joe@example.com',
+        'wife@example.com',
+      ]);
+      assert.ok(emailCall.args[0].input.Message.Subject.Data.includes('Emma'));
+      assert.ok(emailCall.args[0].input.Message.Body.Text.Data.includes('What animal jumped?'));
     } finally {
       global.fetch = originalFetch;
     }
   });
 
-  await test('word count / ledger update still succeeds even if Claude call fails', async () => {
+  await test('word count / ledger update still succeeds even if Claude call fails (so no email is sent either)', async () => {
     s3Mock.reset();
+    sesMock.reset();
     const originalFetch = global.fetch;
     try {
       const logResult = await testHelpers.ledgerActions.logCompletedSession(
@@ -146,6 +163,45 @@ async function run() {
       // No questions were saved, since generation failed
       const questionsRecord = await testHelpers.store.getQuestions('jack', 'session-claude-fails');
       assert.strictEqual(questionsRecord, null);
+
+      // No email attempted either, since there were no questions to send
+      assert.strictEqual(sesMock.commandCalls(SendEmailCommand).length, 0);
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  await test('word count and saved questions still succeed even if the email itself fails to send', async () => {
+    s3Mock.reset();
+    sesMock.reset();
+    sesMock.on(SendEmailCommand).rejects(new Error('SES sandbox: recipient not verified'));
+    const originalFetch = global.fetch;
+    try {
+      const logResult = await testHelpers.ledgerActions.logCompletedSession(
+        'jack',
+        '2026-07-20T16:00:00.000Z',
+        15,
+        null,
+        'session-email-fails'
+      );
+      await testHelpers.store.setPendingSession('jack', 'session-email-fails', {
+        weekId: logResult.weekId,
+        grade: '4th grade',
+        displayName: 'Jack',
+        createdAt: '2026-07-20T16:00:00.000Z',
+      });
+
+      s3Mock.on(GetObjectCommand).resolves(mockTranscribeOutput('some words to transcribe here today'));
+      const expectedQuestions = [{ question: 'What happened?', guidance: 'Describe the event.' }];
+      global.fetch = async () => mockClaudeResponse(expectedQuestions);
+
+      const result = await handler(fakeEvent('jack', 'session-email-fails'));
+
+      assert.ok(result.wpm > 0);
+      // Questions were still saved and are still visible in the app, even
+      // though the email itself failed (e.g. unverified SES recipient)
+      const questionsRecord = await testHelpers.store.getQuestions('jack', 'session-email-fails');
+      assert.deepStrictEqual(questionsRecord.questions, expectedQuestions);
     } finally {
       global.fetch = originalFetch;
     }

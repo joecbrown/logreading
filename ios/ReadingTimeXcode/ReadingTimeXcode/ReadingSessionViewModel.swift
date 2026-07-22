@@ -66,7 +66,11 @@ final class ReadingSessionViewModel: ObservableObject {
         var sessionId: String? = nil
         if let recordingURL {
             do {
-                let uploadInfo = try await APIClient.shared.requestUploadUrl(childId: child.id, grade: child.grade)
+                let uploadInfo = try await APIClient.shared.requestUploadUrl(
+                    childId: child.id,
+                    grade: child.grade,
+                    displayName: child.displayName
+                )
                 try await APIClient.shared.uploadAudio(fileURL: recordingURL, to: uploadInfo.uploadUrl)
                 sessionId = uploadInfo.sessionId
             } catch {

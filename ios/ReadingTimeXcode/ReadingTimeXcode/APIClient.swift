@@ -79,7 +79,10 @@ final class APIClient {
     /// recording. Call this BEFORE logSession, then uploadAudio, then
     /// logSession with the returned sessionId — see
     /// ReadingSessionViewModel.stopSession for the full sequence.
-    func requestUploadUrl(childId: String, grade: String?) async throws -> UploadUrlResponse {
+    /// displayName is used for the "comprehension questions ready" email
+    /// (addressing it by the child's actual name, not the lowercase
+    /// childId slug used internally).
+    func requestUploadUrl(childId: String, grade: String?, displayName: String?) async throws -> UploadUrlResponse {
         guard let base = baseURL else { throw APIError.notConfigured }
         let url = base.appendingPathComponent("children/\(childId)/sessions/upload-url")
 
@@ -87,6 +90,9 @@ final class APIClient {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         var body: [String: Any] = [:]
+        if let displayName {
+            body["displayName"] = displayName
+        }
         if let grade {
             body["grade"] = grade
         }
