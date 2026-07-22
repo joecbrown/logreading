@@ -1,20 +1,16 @@
 # Reading Time / Electronics Bank — Ledger Core
 
-> **Status:** Backend is **deployed and confirmed working end-to-end** —
-> DynamoDB table, Lambda function, and API Gateway HTTP API are all live
-> in AWS (`us-east-2`). The iPad app has been built, run (Simulator), and
-> tested with real kids reading, successfully logging real sessions
-> through the real deployed backend (confirmed via DynamoDB's table
-> explorer). The Alexa skill (`lambda/index.js`, `skill-package/`) was the
-> original front-end, fully built + tested, but is no longer the active
-> target — replaced by the iPad app, since Alexa can't do continuous
-> listening for auto-pause-on-silence or transcription. Kept as reference.
->
-> **New: the S3 + Amazon Transcribe + Claude question-generation
-> pipeline is built and tested (70 tests passing across the backend) but
-> NOT YET DEPLOYED** — it needs an S3 bucket, two new Lambda functions,
-> an EventBridge rule, and a Claude API key, none of which exist in AWS
-> yet. See "Deploying the Transcription Pipeline" below for the walkthrough.
+> **Status:** The **entire pipeline is deployed and confirmed working
+> end-to-end** — DynamoDB, the REST API (Lambda + API Gateway), and now
+> the full S3 + Amazon Transcribe + Claude question-generation pipeline
+> are all live in AWS (`us-east-2`) and have processed a real reading
+> session start to finish: iPad app → S3 upload → Transcribe → DynamoDB
+> (real word count/WPM attached) → Claude → real comprehension questions
+> displayed back in the app. The Alexa skill (`lambda/index.js`,
+> `skill-package/`) was the original front-end, fully built + tested, but
+> is no longer the active target — replaced by the iPad app, since Alexa
+> can't do continuous listening for auto-pause-on-silence or
+> transcription. Kept as reference.
 >
 > **Known gap worth flagging:** the deployed API has no authentication —
 > anyone with the invoke URL could hit it. Low practical risk for a home
@@ -22,7 +18,7 @@
 > (e.g. an API key or IAM auth on the routes) before treating this as
 > more than a personal project.
 
-*Captured: July 20, 2026*
+*Captured: July 21, 2026*
 
 ## Files
 
@@ -105,58 +101,90 @@ for later grade-level calibration of comprehension questions.
    somewhere for your own reference, put it in your local `.env` (already
    gitignored), not in a tracked file.
 
-## Deploying the Transcription Pipeline (NOT done yet — this session's next step)
+## Deploying the Transcription Pipeline — ✅ done, confirmed end-to-end
 
-None of this exists in AWS yet. Rough order to build it in:
+Full walkthrough (as actually executed, corrected from the original plan
+below where reality differed):
 
-1. **Create an S3 bucket** (e.g. `reading-app-audio-<something-unique>`) in
-   `us-east-2`. This holds both the uploaded audio (`audio/{childId}/{sessionId}.caf`)
-   and Transcribe's output (`transcripts/{childId}/{sessionId}.json`).
-2. **Deploy `transcribe/start.js`** as a new Lambda function (e.g.
-   `ReadingAppTranscribeStart`), same packaging approach as `ReadingAppApi`
-   (zip of the file + `lib/` + production `node_modules`, including the
-   new `@aws-sdk/client-transcribe` dependency). Handler:
-   `transcribe/start.handler`.
-3. **Add an S3 event trigger** on the bucket from step 1: "All object
-   create events", prefix `audio/`, pointing at the Lambda from step 2.
-4. **Grant that Lambda's execution role** permission to call
-   `transcribe:StartTranscriptionJob` and to read/write the S3 bucket
-   (`AmazonTranscribeFullAccess` and `AmazonS3FullAccess` managed policies
-   are the broad-but-simple option, same tradeoff as elsewhere in this
-   project).
-5. **Deploy `transcribe/complete.js`** as another new Lambda (e.g.
-   `ReadingAppTranscribeComplete`). Handler: `transcribe/complete.handler`.
-   Needs environment variables `READING_APP_TABLE=ReadingAppTable` and
-   `ANTHROPIC_API_KEY=<your key>` (get one from
+1. ✅ **S3 bucket** created in `us-east-2` for uploaded audio
+   (`audio/{childId}/{sessionId}.wav` — see format note below) and
+   Transcribe's output (`transcripts/{childId}/{sessionId}.json`)
+2. ✅ **`transcribe/start.js`** deployed as Lambda `ReadingAppTranscribeStart`
+   (zip of the file + `lib/` + production `node_modules` including
+   `@aws-sdk/client-transcribe`), handler `transcribe/start.handler`
+3. ✅ **S3 event trigger** on the bucket: "All object create events",
+   prefix `audio/`, targeting that Lambda
+4. ✅ That Lambda's execution role granted `AmazonTranscribeFullAccess` +
+   `AmazonS3FullAccess`
+5. ✅ **`transcribe/complete.js`** deployed as Lambda
+   `ReadingAppTranscribeComplete`, handler `transcribe/complete.handler`,
+   env vars `READING_APP_TABLE`, `AUDIO_BUCKET`, and `ANTHROPIC_API_KEY`
+   (a Claude API key is a **separate account/product from a claude.ai
+   subscription** — get one at
    [console.anthropic.com](https://console.anthropic.com) if you don't
-   have one).
-6. **Grant that Lambda's role** DynamoDB access (`AmazonDynamoDBFullAccess`,
-   already used elsewhere) and S3 read access (`AmazonS3ReadOnlyAccess`)
-   for fetching the transcript.
-7. **Create an EventBridge rule**: Amazon EventBridge → Rules → Create
-   rule. Event source: "AWS services" → Service: "Transcribe" → Event
-   type: "Transcribe Job State Change". Target: the Lambda from step 5.
-   (This is what actually connects "transcription finished" to the
-   completion handler — Transcribe itself has no direct Lambda trigger.)
-8. **Test end-to-end**: use the iPad app to do a real reading session,
-   confirm audio lands in S3, confirm a Transcribe job starts and
-   completes (Amazon Transcribe console shows job status), confirm the
-   DynamoDB entry gets its `wordsPerMinute` filled in, and confirm
-   questions appear via the app's "Check for Comprehension Questions"
-   button.
+   have one; a claude.ai Pro/Max plan does not include API access)
+6. ✅ That Lambda's role granted `AmazonDynamoDBFullAccess` +
+   `AmazonS3ReadOnlyAccess`
+7. ✅ **EventBridge rule** (`TranscribeJobCompleteRule`): source
+   "aws.transcribe", event type "Transcribe Job State Change", target =
+   `ReadingAppTranscribeComplete` — this is the only way to know when a
+   transcription job finishes; Transcribe has no direct Lambda trigger
+8. ✅ **API Gateway routes added** for the two new endpoints
+   (`POST /children/{childId}/sessions/upload-url` and
+   `GET /children/{childId}/sessions/{sessionId}/questions`) — **easy to
+   miss**: redeploying a Lambda's code does NOT automatically create
+   routes for new paths in API Gateway; those have to be added
+   explicitly as their own step, same as the original two routes were.
+9. ✅ **Confirmed working end-to-end** via a real reading session in the
+   app: audio in S3 → Transcribe job completes → DynamoDB entry gets a
+   real `wordsPerMinute`/`wordsRead` → real comprehension questions
+   appear via the app's "Check for Comprehension Questions" button
+
+### Real bugs hit and fixed while deploying this (all confirmed via actual testing, not caught in review)
+
+1. **childId with a space broke Transcribe job names** — Transcribe job
+   names only allow `[0-9a-zA-Z._-]`. A test child named with a space
+   (e.g. "oj test4") produced an invalid job name and the job failed
+   outright. Fixed at the root: the iPad app's `Child.makeId` now
+   produces a real slug (spaces become hyphens, unsafe characters
+   stripped), and the backend's upload-url route now validates and
+   rejects bad childIds defensively too.
+2. **Recorded audio format (`.caf`) isn't supported by Amazon Transcribe
+   at all** — confirmed via AWS's own docs: supported formats are WAV,
+   MP3, MP4, M4A, FLAC, Ogg, AMR, WebM; CAF isn't among them. Every job
+   failed with `Unsupported audio format: caf` until the recording format
+   was switched to WAV (a one-line change in `AudioSessionManager.swift`,
+   since WAV is natively compatible with the same linear PCM data being
+   captured — no format conversion needed, just a different container).
+3. **The EventBridge "Transcribe Job State Change" event is much leaner
+   than assumed** — the original code tried to read the audio's S3
+   bucket from `detail.Media.MediaFileUri` in the event, assuming the
+   full job configuration would be included. It isn't — the real event
+   only carries the job name and status. Fixed by passing the bucket
+   name in as an environment variable instead, which is simpler and more
+   reliable than trying to extract it from event fields that were never
+   actually there.
+4. **A stale Claude model name** (`claude-sonnet-4-6`, not a real model)
+   in the question-generation call — fixed to `claude-sonnet-5`.
+5. **Lambda's default 3-second timeout** was killing
+   `ReadingAppTranscribeComplete` before it could finish — fetching from
+   S3 plus a network call to the Claude API plus a DynamoDB write
+   routinely takes longer than 3 seconds. The function was timing out
+   silently (no error logged, just killed) on every single invocation.
+   Fixed by raising the timeout to 30 seconds in the function's General
+   configuration.
 
 ## Next steps (not built yet)
 
-1. **Deploy the transcription pipeline** (see walkthrough above)
-2. **Per-session notifications** — text (SMS) + email, triggered right
+1. **Per-session notifications** — text (SMS) + email, triggered right
    after a session logs (hook into `api/handler.js`'s sessions route)
-3. **Web dashboard** — read-only view of the ledger; the REST API's
+2. **Web dashboard** — read-only view of the ledger; the REST API's
    `GET /children/{childId}/balance` route already supports this
-4. **Real iPad device testing** — only Simulator so far, even for the
+3. **Real iPad device testing** — only Simulator so far, even for the
    real-kids test; a physical device may behave differently and need
    further threshold retuning
-5. **Add API authentication** (see status note above)
-6. Wire real credentials into `.env` for AWS/transcription/notification
+4. **Add API authentication** (see status note above)
+5. Wire real credentials into `.env` for AWS/transcription/notification
    services (see `.env.example` — never commit the real `.env`)
 
 Phase 2 (device-lock enforcement) remains parked — not a near-term
@@ -198,12 +226,8 @@ auto-pause/resume verified against real silence/speech (including
 correctly ignoring false triggers like keyboard clicks), and a full
 session (start → stop → log → balance refresh) confirmed to reach the
 real deployed AWS backend, with the resulting row visible in DynamoDB's
-table explorer. Not yet tested on a real physical iPad — Simulator only
-so far (using the Mac's own mic).
-
-**Not yet tested: the new upload/questions flow.** The upload-URL
-request, S3 upload, and questions-checking code was written this session
-alongside the backend pipeline, but hasn't been run in Xcode yet — same
-"written carefully, needs real verification" caveat as any iOS change
-here. Since the backend pipeline it talks to isn't deployed yet either
-(see above), there's nothing to test it against until that's done.
+table explorer. **The upload/transcription/questions flow is now also
+confirmed working end-to-end**, including through several real bugs
+found and fixed along the way (see "Deploying the Transcription
+Pipeline" above for the full list). Not yet tested on a real physical
+iPad — Simulator only so far (using the Mac's own mic).

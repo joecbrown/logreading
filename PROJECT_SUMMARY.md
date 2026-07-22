@@ -1,6 +1,6 @@
 # Reading Time / Electronics Bank App — Project Summary
 
-*Compiled July 21, 2026 — backend deployed and confirmed working end-to-end; iPad app tuned and confirmed working with real kids; S3 + Transcribe + Claude question-generation pipeline built and tested (70 tests), AWS deployment in progress but currently blocked on an Anthropic Console billing issue, for context on resuming work.*
+*Compiled July 21, 2026 (night) — the ENTIRE pipeline is now deployed and confirmed working end-to-end: iPad app → S3 → Amazon Transcribe → DynamoDB → Claude → real comprehension questions, all verified with a real reading session, not just individually tested pieces. For context on resuming work.*
 
 Repo: https://github.com/joecbrown/logreading
 
@@ -283,78 +283,86 @@ out of every file in this repo, including this one), but worth adding
 (an API key, or IAM-based auth on the routes) before this is more than a
 personal/family project. Tracked as a next step below.
 
-## Transcription Pipeline Deployment — 🚧 In progress, blocked on Anthropic billing
+## Transcription Pipeline Deployment — ✅ COMPLETE, confirmed end-to-end
 
 **Region: `us-east-2`, same as everything else.**
 
-**Completed so far:**
-1. ✅ S3 bucket created (session audio + Transcribe output land here)
-2. ✅ Lambda `ReadingAppTranscribeStart` created, code uploaded (from
-   `lambda-transcribe-start.zip` — a minimal deployment package with just
-   `transcribe/start.js` + `lib/transcriptHelpers.js` + the
-   `@aws-sdk/client-transcribe` dependency, locally verified to load and
-   run correctly before handing over), handler set to
-   `transcribe/start.handler`
-3. ✅ That Lambda's execution role granted `AmazonTranscribeFullAccess`
-   and `AmazonS3FullAccess` (broad, same practical tradeoff as elsewhere)
-4. ✅ S3 event notification configured: object-create events with prefix
-   `audio/` → triggers `ReadingAppTranscribeStart`
-5. ✅ Lambda `ReadingAppTranscribeComplete` created, code uploaded (from
-   `lambda-transcribe-complete.zip` — `transcribe/complete.js` +
-   `lib/{transcriptHelpers,store,dynamoStore,ledgerStore,ledger}.js` +
-   S3/DynamoDB SDK deps, also locally verified before handing over),
-   handler set to `transcribe/complete.handler`
-6. ✅ `READING_APP_TABLE=ReadingAppTable` environment variable set on
-   that Lambda
+**Everything live:**
+1. ✅ S3 bucket (session audio + Transcribe output)
+2. ✅ Lambda `ReadingAppTranscribeStart`, handler `transcribe/start.handler`,
+   role granted `AmazonTranscribeFullAccess` + `AmazonS3FullAccess`
+3. ✅ S3 event notification (prefix `audio/`) → triggers that Lambda
+4. ✅ Lambda `ReadingAppTranscribeComplete`, handler
+   `transcribe/complete.handler`, env vars `READING_APP_TABLE`,
+   `AUDIO_BUCKET`, `ANTHROPIC_API_KEY` (billing issue on Anthropic's side
+   from earlier eventually cleared — see Git/Learning Notes)
+5. ✅ That Lambda's role granted `AmazonDynamoDBFullAccess` +
+   `AmazonS3ReadOnlyAccess`
+6. ✅ EventBridge rule `TranscribeJobCompleteRule` (source
+   "aws.transcribe", "Transcribe Job State Change") → targets that Lambda
+7. ✅ API Gateway routes added for `POST .../sessions/upload-url` and
+   `GET .../sessions/{sessionId}/questions`, attached to `ReadingAppApi`
+8. ✅ **Confirmed working via a real reading session end-to-end** — real
+   audio uploaded, transcribed, real word count/WPM attached to the
+   DynamoDB entry, real Claude-generated comprehension questions
+   retrieved via the app
 
-**Blocked here:** the `ANTHROPIC_API_KEY` environment variable needs a
-real key, which needs a working Anthropic Console (developer platform,
-separate product/billing from a claude.ai subscription — confirmed via
-Anthropic's own support docs that these are unrelated even though it's
-the same company) account with billing set up. **Billing setup is
-currently failing** with a generic "Payment failed" error, tried across
-multiple cards — search turned up several independent, similar reports
-over recent months, suggesting this may be a real issue on Anthropic's
-side rather than anything wrong with the cards tried. Anthropic's own
-support (support.anthropic.com) is the next avenue, not something
-resolvable from this end.
+### Real bugs hit during deployment (five, all found via actual testing — this is the value of testing against real infrastructure instead of stopping at "the code looks right")
 
-**Not yet reached (resume here once the API key situation is sorted):**
-1. Grant `ReadingAppTranscribeComplete`'s execution role
-   `AmazonDynamoDBFullAccess` + `AmazonS3ReadOnlyAccess`
-2. Add the `ANTHROPIC_API_KEY` environment variable once a working key
-   exists
-3. Create the **EventBridge rule**: source "aws.transcribe", event type
-   "Transcribe Job State Change", target = `ReadingAppTranscribeComplete`
-   — this is the missing link between "transcription finished" and the
-   completion Lambda actually running (Transcribe has no direct Lambda
-   trigger)
-4. End-to-end test: real reading session in the iPad app → confirm audio
-   lands in S3 → confirm a Transcribe job starts and completes → confirm
-   the DynamoDB entry gets `wordsPerMinute` filled in → confirm questions
-   appear via the app's "Check for Comprehension Questions" button
-5. Test the iPad app's new upload/questions code for the first time
-   (written this session, never run — see iPad app section above)
+1. **A test child's name had a space in it** ("oj test4"), which flowed
+   into the Transcribe job name and violated Transcribe's strict
+   character rules (`[0-9a-zA-Z._-]` only) — job failed with
+   `BadRequestException`. Root-caused and fixed on the iPad side:
+   `Child.makeId` now actually produces a slug (spaces → hyphens, unsafe
+   characters stripped) instead of just lowercasing. Also added
+   server-side validation in `api/handler.js` as defense in depth.
+2. **Recorded audio was `.caf` (Apple's Core Audio Format), which Amazon
+   Transcribe doesn't support at all** — confirmed against AWS's own
+   docs (supported: WAV, MP3, MP4, M4A, FLAC, Ogg, AMR, WebM). Every job
+   failed with `Unsupported audio format: caf`. Fixed by switching the
+   recording to `.wav` — a one-line extension change in
+   `AudioSessionManager.swift`, since the underlying linear PCM data
+   didn't need to change, just its container.
+3. **Wrong assumption about the EventBridge event shape** — the
+   completion Lambda tried to read the audio's S3 bucket from
+   `detail.Media.MediaFileUri`, assuming the full Transcribe job config
+   would be in the event. It isn't — the real "Transcribe Job State
+   Change" event is minimal (job name + status only). Fixed by passing
+   the bucket in as an env var instead of trying to derive it from a
+   field that was never actually present.
+4. **A stale/incorrect Claude model name** (`claude-sonnet-4-6`) in the
+   question-generation call — fixed to `claude-sonnet-5`.
+5. **Lambda's default 3-second timeout was silently killing the
+   completion function on every single run** — no error was ever logged,
+   because AWS force-kills the process at the timeout before the code
+   gets a chance to log anything. The actual work (S3 fetch + Claude API
+   call + DynamoDB write) routinely takes longer than 3 seconds. This one
+   was the trickiest to diagnose, since the symptom (silence, no error)
+   looked identical to "nothing happened" rather than "something failed"
+   — the giveaway was noticing `Status: timeout` in the CloudWatch log's
+   REPORT line. Fixed by raising the timeout to 30 seconds.
 
-Full step-by-step walkthrough (matching what's already been done) is in
-the main README's "Deploying the Transcription Pipeline" section.
+Also worth noting as a process lesson, not a code bug: **redeploying a
+Lambda's code does not create new API Gateway routes** — those new
+`upload-url`/`questions` endpoints needed their own explicit route +
+integration-attachment steps in API Gateway, separate from just
+uploading the updated `api/handler.js`. Easy to forget since it worked
+differently from how updating the Lambda's *existing* routes' behavior
+does.
 
 ## Not Yet Built
 
-1. **Finish deploying the transcription pipeline** — blocked on an
-   Anthropic Console billing issue (see dedicated section above for the
-   exact resume point: 4 concrete remaining steps once unblocked)
-2. **Add API authentication** (see security note above)
-3. **Per-session notifications** — SMS + email, triggered right after a
+1. **Add API authentication** (see security note above)
+2. **Per-session notifications** — SMS + email, triggered right after a
    session logs (SES for email; SNS or Twilio for SMS, not yet decided)
-4. **Web dashboard** — read-only view of the ledger; the REST API's
+3. **Web dashboard** — read-only view of the ledger; the REST API's
    balance route already supports this
-5. **Real iPad device testing** — Simulator only so far, even for the
+4. **Real iPad device testing** — Simulator only so far, even for the
    real-kids test; a physical device may behave differently and likely
    need further threshold retuning (different room, different mic)
-6. Wire real credentials into `.env` for AWS/notifications/Claude API
+5. Wire real credentials into `.env` for AWS/notifications/Claude API
 
-No preference has been stated on ordering among items 3–4 — open decision
+No preference has been stated on ordering among items 2–3 — open decision
 for later.
 
 **Phase 2 (parked, not a near-term priority):** actually locking the
@@ -365,6 +373,27 @@ current parent-enforced honor system for spending earned time.
 
 - Repo live at `https://github.com/joecbrown/logreading`, connected and
   working
+- **Anthropic Console billing issue from earlier resolved** — the
+  "Payment failed" error eventually cleared (through Anthropic's own
+  support, or possibly just resolved itself/a different card worked;
+  worth noting for future reference that this can happen and isn't
+  necessarily something wrong with your own card) and a working API key
+  was obtained
+- This session's biggest debugging lesson: **CloudWatch logs showing no
+  error at all can itself be the diagnostic clue**, not just "nothing to
+  see here." A Lambda silently hitting its timeout produces no error
+  message — the function just stops — and the only visible sign is
+  `Status: timeout` in the automatically-generated REPORT line. Worth
+  reading that line specifically, not just scanning for words like
+  "ERROR."
+- This session's other lesson: **test against the real, deployed
+  infrastructure, not just local logic tests.** All 70+ local tests
+  passed the whole time — they were testing the code's logic correctly.
+  None of them could have caught: Transcribe's job-naming character
+  rules, Transcribe's supported audio format list, the actual shape of
+  an EventBridge event, a stale model name, or a Lambda timeout default
+  — all of these are facts about the real external world that only
+  surface by actually running the thing against real services.
 - First-ever git session (an earlier day) covered: identity config,
   personal access token auth, fetching without altering local files,
   merging unrelated histories, resolving a real conflict, aborting/redoing
